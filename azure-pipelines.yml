@@ -20,9 +20,15 @@ pr:
 variables:
   - name: BUILD_BRANCH
     ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
-      value: $(System.PullRequest.TargetBranch)
+      ${{ if eq( variables['System.PullRequest.TargetBranch'], 'refs/heads/202412' ) }}:
+        value: '202411'
+      ${{ else }}:
+        value: 'master'
     ${{ else }}:
-      value: $(Build.SourceBranchName)
+      ${{ if eq( variables['Build.SourceBranchName'], '202412' ) }}:
+        value: '202411'
+      ${{ else }}:
+        value: 'master'
   - name: UNIT_TEST_FLAG
     value: 'ENABLE_TRANSLIB_WRITE=y'
 
