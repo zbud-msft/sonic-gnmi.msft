@@ -14,10 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  BUILD_BRANCH: ${{
-    github.event_name == 'pull_request_target' 
-      && (github.event.pull_request.base.ref == '202412' && '202411' || 'master')
-    || (github.event_name == 'push' && github.ref_name == '202412' && '202411' || 'master' }}
+  BUILD_BRANCH: "${{ github.event_name == 'pull_request_target' ? (github.event.pull_request.base.ref == '202412' ? '202411' : 'master') : (github.event_name == 'push' && github.ref_name == '202412' ? '202411' : 'master') }}"
 
 jobs:
   analyze:
