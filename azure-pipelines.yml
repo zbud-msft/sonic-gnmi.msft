@@ -19,7 +19,7 @@ pr:
 
 variables:
 - name: BUILD_BRANCH
-  value: $[iif(or(and(eq(variables['Build.Reason'],'PullRequest'),eq(variables['System.PullRequest.TargetBranch'],'refs/heads/202412')),eq(variables['Build.SourceBranchName'],'202412')),'202411',iif(eq(variables['Build.Reason'],'PullRequest'),variables['System.PullRequest.TargetBranch'],variables['Build.SourceBranchName']))]
+  value: '202411'
 - name: UNIT_TEST_FLAG
   value: 'ENABLE_TRANSLIB_WRITE=y'
 
