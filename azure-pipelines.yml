@@ -18,19 +18,10 @@ pr:
     - 201???
 
 variables:
-  - name: BUILD_BRANCH
-    ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
-      ${{ if eq( variables['System.PullRequest.TargetBranch'], 'refs/heads/202412' ) }}:
-        value: '202411'
-      ${{ else }}:
-        value: 'master'
-    ${{ else }}:
-      ${{ if eq( variables['Build.SourceBranchName'], '202412' ) }}:
-        value: '202411'
-      ${{ else }}:
-        value: 'master'
-  - name: UNIT_TEST_FLAG
-    value: 'ENABLE_TRANSLIB_WRITE=y'
+- name: BUILD_BRANCH
+  value: $[iif(or(and(eq(variables['Build.Reason'],'PullRequest'),eq(variables['System.PullRequest.TargetBranch'],'refs/heads/202412')),eq(variables['Build.SourceBranchName'],'202412')),'202411',iif(eq(variables['Build.Reason'],'PullRequest'),variables['System.PullRequest.TargetBranch'],variables['Build.SourceBranchName']))]
+- name: UNIT_TEST_FLAG
+  value: 'ENABLE_TRANSLIB_WRITE=y'
 
 resources:
   repositories:
