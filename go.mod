@@ -17,6 +17,7 @@ require (
 	github.com/google/gnxi v0.0.0-20191016182648-6697a080bc2d
 	github.com/jipanyang/gnmi v0.0.0-20180820232453-cb4d464fa018
 	github.com/jipanyang/gnxi v0.0.0-20181221084354-f0a90cca6fd0
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/kylelemons/godebug v1.1.0
 	github.com/msteinert/pam v0.0.0-20201130170657-e61372126161
 	github.com/openconfig/gnmi v0.0.0-20200617225440-d2b4e6a45802
