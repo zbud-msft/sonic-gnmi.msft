@@ -384,7 +384,7 @@ func (s *Server) Get(ctx context.Context, req *gnmipb.GetRequest) (*gnmipb.GetRe
 		return nil, status.Error(codes.Unimplemented, err.Error())
 	}
 
-	addVersion := false
+	addMetadata := false
 	target := ""
 	origin := ""
 	prefix := req.GetPrefix()
@@ -404,7 +404,7 @@ func (s *Server) Get(ctx context.Context, req *gnmipb.GetRequest) (*gnmipb.GetRe
 		dc, err = sdc.NewNonDbClient(paths, prefix)
 	} else if target == "SHOW" {
 		dc, err = sdc.NewShowClient(paths, prefix)
-		addVersion = true
+		addMetadata = true
 	} else if _, ok, _, _ := sdc.IsTargetDb(target); ok {
 		dc, err = sdc.NewDbClient(paths, prefix)
 	} else {
@@ -449,9 +449,9 @@ func (s *Server) Get(ctx context.Context, req *gnmipb.GetRequest) (*gnmipb.GetRe
 		}
 	}
 
-	if addVersion {
-		if versionNotification := buildVersionMetadataNotification(); versionNotification != nil {
-			notifications = append(notifications, versionNotification)
+	if addMetadata {
+		if metadataNotification := buildMetadataNotification(); metadataNotification != nil {
+			notifications = append(notifications, metadataNotification)
 		}
 	}
 
