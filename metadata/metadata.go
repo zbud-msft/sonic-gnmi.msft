@@ -11,10 +11,10 @@ const (
 var metadataVersion string
 
 func init() {
-	if containerVersion := os.Getenv("CONTAINER_VERSION"); buildVersion != "" {
+	if containerVersion := os.Getenv("CONTAINER_VERSION"); containerVersion != "" {
 		metadataVersion = containerVersion
 	} else {
-		metadataVersion = defaultBuildVersion
+		metadataVersion = defaultVersion
 	}
 }
 
