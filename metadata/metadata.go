@@ -6,16 +6,13 @@ import (
 
 const (
 	defaultVersion string = "dev"
+	versionEnvVar  string = "CONTAINER_VERSION"
 )
 
-var metadataVersion string
-
-func init() {
-	if containerVersion := os.Getenv("CONTAINER_VERSION"); containerVersion != "" {
-		metadataVersion = containerVersion
+func Version() string {
+	if containerVersion := os.Getenv(versionEnvVar); containerVersion != "" {
+		return containerVersion
 	} else {
-		metadataVersion = defaultVersion
+		return defaultVersion
 	}
 }
-
-func Version() string { return metadataVersion }

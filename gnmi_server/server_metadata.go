@@ -5,22 +5,31 @@ import (
 	"strconv"
 	"time"
 
+	log "github.com/golang/glog"
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/sonic-net/sonic-gnmi/metadata"
 )
 
 const (
-	metadataPrefix string = "metadata"
-	versionPath    string = "version"
+	metadataPrefix        string = "metadata"
+	metadataEnvVar        string = "ENABLE_METADATA"
+	versionPath           string = "version"
+	versionMetadataEnvVar string = "ENABLE_METADATA_VERSION"
 )
 
-func versionMetadataDisabled() bool {
-	value := os.Getenv("DISABLE_METADATA_VERSION")
-	return value == "1"
+func metadataEnabled() bool {
+	value := os.Getenv(metadataEnvVar)
+	return value == "true"
+}
+
+func versionMetadataEnabled() bool {
+	value := os.Getenv(versionMetadataEnvVar)
+	return value == "true"
 }
 
 func buildVersionMetadataUpdate() *gnmipb.Update {
-	if versionMetadataDisabled() {
+	if !versionMetadataEnabled() {
+		log.V(4).Infof("Version metadata is disabled")
 		return nil
 	}
 	versionData := []byte(strconv.Quote(metadata.Version()))
@@ -36,6 +45,11 @@ func buildVersionMetadataUpdate() *gnmipb.Update {
 }
 
 func buildMetadataNotification() *gnmipb.Notification {
+	if !metadataEnabled() {
+		log.V(4).Infof("metadata is disabled")
+		return nil
+	}
+
 	var updates []*gnmipb.Update
 
 	if versionUpdate := buildVersionMetadataUpdate(); versionUpdate != nil {
