@@ -22,11 +22,12 @@ const (
 	TargetAddr   = "127.0.0.1:8081"
 	QueryTimeout = 10
 
-	MetadataPrefix = "metadata"
-	VersionPath = "version"
-	MetadataEnvVar = "ENABLE_METADATA"
+	MetadataPrefix         = "metadata"
+	VersionPath            = "version"
+	VersionKey             = "container_version"
+	MetadataEnvVar         = "ENABLE_METADATA"
 	VersionMetadataEnvVar  = "ENABLE_METADATA_VERSION"
-	VersionEnvVar = "CONTAINER_VERSION"
+	VersionEnvVar          = "CONTAINER_VERSION"
 	DefaultMetadataVersion = "dev"
 )
 

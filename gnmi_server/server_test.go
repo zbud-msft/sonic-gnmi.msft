@@ -380,7 +380,7 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 
 	if resp != nil {
 		for _, notif := range resp.GetNotification() {
-			if notif.GetPrefix().GetOrigin() == MetadataPrefix { // TODO change this to const
+			if notif.GetPrefix().GetOrigin() == MetadataPrefix {
 				metadataNotification = notif
 			} else {
 				payloadNotifications = append(payloadNotifications, notif)
@@ -388,7 +388,7 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 		}
 	}
 
-	if os.Getenv(MetadataEnvVar) == "true" { // TODO
+	if os.Getenv(MetadataEnvVar) == "true" {
 		if metadataNotification == nil {
 			t.Fatalf("expected metadata notification, got none")
 		}
@@ -410,9 +410,15 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 			if versionData == nil {
 				t.Fatalf("version must be set as json-ietf string, got %T", versionUpdate.GetVal().GetValue())
 			}
-			var versionString string
-			if err := json.Unmarshal(versionData, &versionString); err != nil {
+
+			var versionPayload map[string]string
+			if err := json.Unmarshal(versionData, &versionPayload); err != nil {
 				t.Fatalf("failed to unmarshal version json: %v", err)
+			}
+
+			versionString, ok := versionPayload[VersionKey]
+			if !ok {
+				t.Fatalf("Payload missing version key %q, payload=%v", VersionKey, versionPayload)
 			}
 
 			setVersion := os.Getenv(VersionEnvVar)
