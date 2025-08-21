@@ -134,7 +134,7 @@ func TestShowClientVersionMetadata(t *testing.T) {
 			wantRespVal: []byte(interfaceCountersSelectPorts),
 			valTest:     true,
 			testInit: func() {
-				t.Setenv("CONTAINER_VERSION", "1.0.0")
+				os.Setenv(VersionEnvVar, "1.0.0")
 				AddDataSet(t, ConfigDbNum, portsFileName)
 				AddDataSet(t, CountersDbNum, portOidMappingFileName)
 				AddDataSet(t, CountersDbNum, portCountersFileName)
