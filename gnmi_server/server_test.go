@@ -1785,12 +1785,10 @@ func runGnmiTestGet(t *testing.T, namespace string) {
 					elem: <name: "` + invalidFabricPortName + `">
 								`,
 			wantRetCode: codes.NotFound,
-			valTest:     true,
 		}, {
 			desc:        "Invalid DBKey of length 1",
 			pathTarget:  stateDBPath,
 			textPbPath:  ``,
-			valTest:     true,
 			wantRetCode: codes.NotFound,
 		},
 
