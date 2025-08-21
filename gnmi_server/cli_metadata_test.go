@@ -25,9 +25,9 @@ func TestShowClientVersionMetadata(t *testing.T) {
 	defer ResetDataSetsAndMappings(t)
 
 	defer func() {
-		os.Setenv("CONTAINER_VERSION", "")
-		os.Setenv("METADATA_TESTS", "1")
-		os.Setenv("METADATA_VERSION_TEST", "1")
+		os.Setenv(VersionEnvVar, "")
+		os.Setenv(MetadataEnvVar, "false")
+		os.Setenv(VersionMetadataEnvVar, "false")
 	}()
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
@@ -74,8 +74,8 @@ func TestShowClientVersionMetadata(t *testing.T) {
 			wantRespVal: []byte(showInterfaceCountersHelp),
 			valTest:     true,
 			testInit: func() {
-				os.Setenv("METADATA_TESTS", "0")
-				os.Setenv("METADATA_VERSION_TEST", "0")
+				os.Setenv(MetadataEnvVar, "true")
+				os.Setenv(VersionMetadataEnvVar, "true")
 			},
 		},
 		{

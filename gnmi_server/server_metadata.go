@@ -1,19 +1,19 @@
 package gnmi
 
 import (
-	"os"
-	"strconv"
-	"time"
-
+	"encoding/json"
 	log "github.com/golang/glog"
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/sonic-net/sonic-gnmi/metadata"
+	"os"
+	"time"
 )
 
 const (
 	metadataPrefix        string = "metadata"
 	metadataEnvVar        string = "ENABLE_METADATA"
 	versionPath           string = "version"
+	versionKey            string = "container_version"
 	versionMetadataEnvVar string = "ENABLE_METADATA_VERSION"
 )
 
@@ -32,7 +32,16 @@ func buildVersionMetadataUpdate() *gnmipb.Update {
 		log.V(4).Infof("Version metadata is disabled")
 		return nil
 	}
-	versionData := []byte(strconv.Quote(metadata.Version()))
+
+	versionPayload := map[string]string{
+		versionKey: metadata.Version(),
+	}
+
+	versionData, err := json.Marshal(versionPayload)
+	if err != nil {
+		log.Warningf("failed to marshal version metadata: %v", err)
+		return nil
+	}
 
 	return &gnmipb.Update{
 		Path: &gnmipb.Path{
