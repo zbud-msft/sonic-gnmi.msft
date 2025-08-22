@@ -64,6 +64,21 @@ func TestShowClientVersionMetadata(t *testing.T) {
 		testInit    func()
 	}{
 		{
+			desc:       "Default version test when specifying help, no version added",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "interface" >
+				elem: <name: "counters" key: { key: "help" value: "True" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: []byte(showInterfaceCountersHelp),
+			valTest:     true,
+			testInit: func() {
+				os.Setenv(MetadataEnvVar, "false")
+				os.Setenv(VersionMetadataEnvVar, "false")
+			},
+		},
+		{
 			desc:       "Default version test when specifying help",
 			pathTarget: "SHOW",
 			textPbPath: `
