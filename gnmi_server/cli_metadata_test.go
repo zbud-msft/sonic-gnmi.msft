@@ -12,6 +12,7 @@ import (
 
 	pb "github.com/openconfig/gnmi/proto/gnmi"
 
+	"github.com/sonic-net/sonic-gnmi/metadata"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,9 +26,10 @@ func TestShowClientVersionMetadata(t *testing.T) {
 	defer ResetDataSetsAndMappings(t)
 
 	defer func() {
-		os.Setenv(VersionEnvVar, "")
-		os.Setenv(MetadataEnvVar, "false")
-		os.Setenv(VersionMetadataEnvVar, "false")
+		metadata.SetVersionTest(metadata.DefaultVersion)
+		os.Setenv(metadata.VersionEnvVar, "")
+		os.Setenv(metadata.EnableMetadataEnvVar, "false")
+		os.Setenv(metadata.EnableVersionEnvVar, "false")
 	}()
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
@@ -74,8 +76,8 @@ func TestShowClientVersionMetadata(t *testing.T) {
 			wantRespVal: []byte(showInterfaceCountersHelp),
 			valTest:     true,
 			testInit: func() {
-				os.Setenv(MetadataEnvVar, "false")
-				os.Setenv(VersionMetadataEnvVar, "false")
+				os.Setenv(metadata.EnableMetadataEnvVar, "false")
+				os.Setenv(metadata.EnableVersionEnvVar, "false")
 			},
 		},
 		{
@@ -89,8 +91,8 @@ func TestShowClientVersionMetadata(t *testing.T) {
 			wantRespVal: []byte(showInterfaceCountersHelp),
 			valTest:     true,
 			testInit: func() {
-				os.Setenv(MetadataEnvVar, "true")
-				os.Setenv(VersionMetadataEnvVar, "true")
+				os.Setenv(metadata.EnableMetadataEnvVar, "true")
+				os.Setenv(metadata.EnableVersionEnvVar, "true")
 			},
 		},
 		{
@@ -149,7 +151,7 @@ func TestShowClientVersionMetadata(t *testing.T) {
 			wantRespVal: []byte(interfaceCountersSelectPorts),
 			valTest:     true,
 			testInit: func() {
-				os.Setenv(VersionEnvVar, "1.0.0")
+				metadata.SetVersionTest("1.0.0")
 				AddDataSet(t, ConfigDbNum, portsFileName)
 				AddDataSet(t, CountersDbNum, portOidMappingFileName)
 				AddDataSet(t, CountersDbNum, portCountersFileName)

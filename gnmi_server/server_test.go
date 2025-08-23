@@ -61,6 +61,7 @@ import (
 	gnoi_file_pb "github.com/openconfig/gnoi/file"
 	gnoi_system_pb "github.com/openconfig/gnoi/system"
 	"github.com/sonic-net/sonic-gnmi/common_utils"
+	"github.com/sonic-net/sonic-gnmi/metadata"
 	"github.com/sonic-net/sonic-gnmi/swsscommon"
 )
 
@@ -380,7 +381,7 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 
 	if resp != nil {
 		for _, notif := range resp.GetNotification() {
-			if notif.GetPrefix().GetOrigin() == MetadataPrefix {
+			if notif.GetPrefix().GetOrigin() == metadata.MetadataPrefix {
 				metadataNotification = notif
 			} else {
 				payloadNotifications = append(payloadNotifications, notif)
@@ -388,16 +389,16 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 		}
 	}
 
-	if os.Getenv(MetadataEnvVar) == "true" {
+	if os.Getenv(metadata.EnableMetadataEnvVar) == "true" {
 		if metadataNotification == nil {
 			t.Fatalf("expected metadata notification, got none")
 		}
 
-		if os.Getenv(VersionMetadataEnvVar) == "true" {
+		if os.Getenv(metadata.VersionEnvVar) == "true" {
 			var versionUpdate *pb.Update
 			for _, update := range metadataNotification.GetUpdate() {
 				elems := update.GetPath().GetElem()
-				if len(elems) == 1 && elems[0].GetName() == VersionPath {
+				if len(elems) == 1 && elems[0].GetName() == metadata.VersionPath {
 					versionUpdate = update
 					break
 				}
@@ -416,14 +417,14 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 				t.Fatalf("failed to unmarshal version json: %v", err)
 			}
 
-			versionString, ok := versionPayload[VersionKey]
+			versionString, ok := versionPayload[metadata.VersionKey]
 			if !ok {
-				t.Fatalf("Payload missing version key %q, payload=%v", VersionKey, versionPayload)
+				t.Fatalf("Payload missing version key %q, payload=%v", metadata.VersionKey, versionPayload)
 			}
 
-			setVersion := os.Getenv(VersionEnvVar)
+			setVersion := os.Getenv(metadata.VersionEnvVar)
 			if setVersion == "" {
-				setVersion = DefaultMetadataVersion
+				setVersion = metadata.DefaultVersion
 			}
 			if setVersion != versionString {
 				t.Fatalf("version mismatch: got %q, want %q", setVersion, versionString)
@@ -5460,8 +5461,8 @@ func init() {
 	// Inform gNMI server to use redis tcp localhost connection
 	sdc.UseRedisLocalTcpPort = true
 	os.Setenv("UNIT_TEST", "1")
-	os.Setenv(MetadataEnvVar, "false")
-	os.Setenv(VersionMetadataEnvVar, "false")
+	os.Setenv(metadata.EnableMetadataEnvVar, "false")
+	os.Setenv(metadata.EnableVersionEnvVar, "false")
 }
 
 func TestMain(m *testing.M) {

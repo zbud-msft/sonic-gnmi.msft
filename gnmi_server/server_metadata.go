@@ -9,21 +9,13 @@ import (
 	"time"
 )
 
-const (
-	metadataPrefix        string = "metadata"
-	metadataEnvVar        string = "ENABLE_METADATA"
-	versionPath           string = "version"
-	versionKey            string = "container_version"
-	versionMetadataEnvVar string = "ENABLE_METADATA_VERSION"
-)
-
 func metadataEnabled() bool {
-	value := os.Getenv(metadataEnvVar)
+	value := os.Getenv(metadata.EnableMetadataEnvVar)
 	return value == "true"
 }
 
 func versionMetadataEnabled() bool {
-	value := os.Getenv(versionMetadataEnvVar)
+	value := os.Getenv(metadata.EnableVersionEnvVar)
 	return value == "true"
 }
 
@@ -34,7 +26,7 @@ func buildVersionMetadataUpdate() *gnmipb.Update {
 	}
 
 	versionPayload := map[string]string{
-		versionKey: metadata.Version(),
+		metadata.VersionKey: metadata.Version(),
 	}
 
 	versionData, err := json.Marshal(versionPayload)
@@ -45,7 +37,7 @@ func buildVersionMetadataUpdate() *gnmipb.Update {
 
 	return &gnmipb.Update{
 		Path: &gnmipb.Path{
-			Elem: []*gnmipb.PathElem{{Name: versionPath}},
+			Elem: []*gnmipb.PathElem{{Name: metadata.VersionPath}},
 		},
 		Val: &gnmipb.TypedValue{
 			Value: &gnmipb.TypedValue_JsonIetfVal{JsonIetfVal: versionData},
@@ -71,7 +63,7 @@ func buildMetadataNotification() *gnmipb.Notification {
 
 	return &gnmipb.Notification{
 		Timestamp: time.Now().UnixNano(),
-		Prefix:    &gnmipb.Path{Origin: metadataPrefix},
+		Prefix:    &gnmipb.Path{Origin: metadata.MetadataPrefix},
 		Update:    updates,
 	}
 }

@@ -4,15 +4,20 @@ import (
 	"os"
 )
 
-const (
-	defaultVersion string = "dev"
-	versionEnvVar  string = "CONTAINER_VERSION"
-)
+var metadataContainerVersion string = DefaultVersion
 
-func Version() string {
-	if containerVersion := os.Getenv(versionEnvVar); containerVersion != "" {
-		return containerVersion
-	} else {
-		return defaultVersion
+func init() {
+	if containerVersion := os.Getenv(VersionEnvVar); containerVersion != "" {
+		metadataContainerVersion = containerVersion
 	}
+}
+
+func Version() string { return metadataContainerVersion }
+
+func SetVersionTest(version string) {
+	value := os.Getenv("UNIT_TEST")
+	if value != "1" {
+		return
+	}
+	metadataContainerVersion = version
 }
