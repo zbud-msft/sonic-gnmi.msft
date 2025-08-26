@@ -137,4 +137,10 @@ func init() {
 		showCmdOptionNonzero,
 		showCmdOptionTrim,
 	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "vlan", "brief"},
+		getVlanBrief,
+		nil,
+		showCmdOptionVerbose,
+	)
 }
