@@ -14,8 +14,12 @@
 
 #### How I did it
 
+#### (SHOW command specific) What sources are you using to fetch data?
+
 #### How to verify it (Please provide snapshot of diff coverage from CI pipeline)
 
-#### Manual test output on device (Please provide output from device that you have tested your changes on)
+#### (Show command specific) Output of show CLI that is equivalent to API output
+
+#### Manual test output of API on device (Please provide output from device that you have tested your changes on)
 
 #### A picture of a cute animal (not mandatory but encouraged)
