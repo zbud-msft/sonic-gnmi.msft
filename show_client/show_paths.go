@@ -118,4 +118,9 @@ func init() {
 		sdc.UnimplementedOption(showCmdOptionNamespace),
 		showCmdOptionDisplay,
 	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "lldp", "table"},
+		getLLDPTable,
+		nil,
+	)
 }
