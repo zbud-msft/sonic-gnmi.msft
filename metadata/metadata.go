@@ -4,6 +4,8 @@ import (
 	"os"
 )
 
+// TEST
+
 var metadataContainerVersion string = DefaultVersion
 
 func init() {
