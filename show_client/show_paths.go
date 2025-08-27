@@ -155,4 +155,17 @@ func init() {
 		nil,
 		showCmdOptionVerbose,
 	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "mac"},
+		getMacTable,
+		map[string]string{
+			"aging-time": "show/mac/aging-time",
+		},
+		showCmdOptionVlan,
+		showCmdOptionPort,
+		showCmdOptionAddress,
+		showCmdOptionType,
+		showCmdOptionCount,
+		showCmdOptionVerbose,
+	)
 }
