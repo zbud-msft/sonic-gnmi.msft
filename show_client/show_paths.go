@@ -130,6 +130,12 @@ func init() {
 		showCmdOptionInterface,
 	)
 	sdc.RegisterCliPath(
+		[]string{"SHOW", "srv6", "stats"},
+		getSRv6Stats,
+		nil,
+		showCmdOptionSid,
+  )
+  sdc.RegisterCliPath(
 		[]string{"SHOW", "queue", "counters"},
 		getQueueCounters,
 		nil,

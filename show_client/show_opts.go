@@ -18,6 +18,7 @@ const (
 	showCmdOptionDomDesc           = "[dom=false] Also display Digital Optical Monitoring (DOM) data"
 	showCmdOptionPeriodDesc        = "[period=INTEGER] Display statistics over a specified period (in seconds)"
 	showCmdOptionJsonDesc          = "[json=true] No-op since response is in json format"
+	showCmdOptionSidDesc           = "[sid=TEXT] Filter by SRv6 SID"
 	showCmdOptionNonzeroDesc       = "[nonzero=true] Display only non-zero values"
 	showCmdOptionTrimDesc          = "[trim=true] Display only trim counters"
 )
@@ -107,6 +108,12 @@ var (
 		showCmdOptionUnimplementedDesc,
 		sdc.StringValue,
 	)
+
+	showCmdOptionSid = sdc.NewShowCmdOption(
+		"sid",
+		showCmdOptionSidDesc,
+		sdc.StringValue,
+  )
 
 	showCmdOptionNonzero = sdc.NewShowCmdOption(
 		"nonzero",
