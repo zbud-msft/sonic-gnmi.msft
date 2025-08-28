@@ -168,4 +168,16 @@ func init() {
 		showCmdOptionCount,
 		showCmdOptionVerbose,
 	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "interface", "switchport", "config"},
+		getInterfaceSwitchportConfig,
+		nil,
+		showCmdOptionInterface,
+	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "interface", "switchport", "status"},
+		getInterfaceSwitchportStatus,
+		nil,
+		showCmdOptionInterface,
+	)
 }
