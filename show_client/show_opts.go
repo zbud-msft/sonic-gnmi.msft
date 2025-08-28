@@ -4,6 +4,8 @@ import (
 	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
 )
 
+// TEST
+
 const (
 	showCmdOptionUnimplementedDesc = "UNIMPLEMENTED"
 	showCmdOptionDisplayDesc       = "[display=all] No-op since no-multi-asic support"
