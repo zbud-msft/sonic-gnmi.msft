@@ -207,4 +207,9 @@ func init() {
 		getDropcountersCapabilities,
 		nil,
 	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "lldp", "neighbors"},
+		getLLDPNeighbors,
+		nil,
+	)
 }
