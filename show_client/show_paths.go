@@ -225,6 +225,11 @@ func init() {
 		nil,
 	)
 	sdc.RegisterCliPath(
+		[]string{"SHOW", "system-memory"},
+		getSystemMemory,
+    nil,
+	)
+  sdc.RegisterCliPath(
 		[]string{"SHOW", "lldp", "neighbors"},
 		getLLDPNeighbors,
 		nil,
