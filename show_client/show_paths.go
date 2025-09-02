@@ -68,6 +68,8 @@ func init() {
 		getInterfaceFecStatus,
 		nil,
 		showCmdOptionInterface,
+		sdc.UnimplementedOption(showCmdOptionNamespace),
+		sdc.UnimplementedOption(showCmdOptionDisplay),
 	)
 	sdc.RegisterCliPath(
 		[]string{"SHOW", "watermark", "telemetry", "interval"},
@@ -88,6 +90,14 @@ func init() {
 		getInterfaceTransceiverPresence,
 		nil,
 		showCmdOptionInterface,
+	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "interface", "status"},
+		getInterfaceStatus,
+		nil,
+		showCmdOptionInterface,
+		sdc.UnimplementedOption(showCmdOptionNamespace),
+		sdc.UnimplementedOption(showCmdOptionDisplay),
 	)
 	sdc.RegisterCliPath(
 		[]string{"SHOW", "headroom_pool", "watermark"},
