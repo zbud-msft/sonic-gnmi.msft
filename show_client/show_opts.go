@@ -23,6 +23,7 @@ const (
 	showCmdOptionTrimDesc          = "[trim=true] Display only trim counters"
 	showCmdOptionGroupDesc         = "[group=TEXT] Filter by logical counter group (eg RX_DROPS, TX_ERR)"
 	showCmdOptionCounterTypeDesc   = "[counter_type=TEXT] Filter by counter type (eg PORT_INGRESS_DROPS, SWITCH_EGRESS_DROPS)"
+	showCmdOptionIPAddressDesc     = "[ipaddress=TEXT] Filter by single IP address"
 )
 
 var (
@@ -115,7 +116,7 @@ var (
 		"sid",
 		showCmdOptionSidDesc,
 		sdc.StringValue,
-  )
+	)
 
 	showCmdOptionNonzero = sdc.NewShowCmdOption(
 		"nonzero",
@@ -139,5 +140,20 @@ var (
 		"counter_type",
 		showCmdOptionCounterTypeDesc,
 		sdc.StringValue,
+	)
+
+	showCmdOptionIPAddress = sdc.NewShowCmdOption(
+		"ipaddress",
+		showCmdOptionIPAddressDesc,
+		sdc.StringValue,
+	)
+
+	showCmdOptionInfoType = sdc.NewShowCmdOption(
+		"info_type",
+		"Additional information to display: routes | advertised-routes | received-routes",
+		sdc.EnumValue,
+		"routes",
+		"advertised-routes",
+		"received-routes",
 	)
 )
