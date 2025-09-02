@@ -219,4 +219,12 @@ func init() {
 		getLLDPNeighbors,
 		nil,
 	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "ipv6", "bgp", "network"},
+		getIPv6BGPNetwork,
+		nil,
+		showCmdOptionIPV6Address,
+		showCmdOptionInfoTypeForBgpNetwork,
+		sdc.UnimplementedOption(showCmdOptionNamespace),
+	)
 }
