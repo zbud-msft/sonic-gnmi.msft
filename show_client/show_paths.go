@@ -227,4 +227,10 @@ func init() {
 		showCmdOptionInfoTypeForBgpNetwork,
 		sdc.UnimplementedOption(showCmdOptionNamespace),
 	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "uptime"},
+		getUptime,
+		nil,
+		showCmdOptionVerbose,
+	)
 }
