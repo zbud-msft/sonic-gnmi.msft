@@ -241,6 +241,22 @@ func init() {
 		nil,
 	)
 	sdc.RegisterCliPath(
+		[]string{"SHOW", "processes"},
+		getProcessesRoot,
+		map[string]string{
+			"summary": "show/processes/summary",
+			"cpu":     "show/processes/cpu",
+			"mem":     "show/processes/mem",
+		},
+		showCmdOptionVerbose,
+	)
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "processes", "summary"},
+		getProcessesSummary,
+		nil,
+		showCmdOptionVerbose,
+	)
+	sdc.RegisterCliPath(
 		[]string{"SHOW", "ipv6", "bgp", "network"},
 		getIPv6BGPNetwork,
 		nil,
