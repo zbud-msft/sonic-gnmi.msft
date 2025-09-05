@@ -127,7 +127,7 @@ func getProxyArp(cfg vlanConfig, vlan string) interface{} {
 	return proxyArp
 }
 
-func getVlanBrief(options sdc.OptionMap) ([]byte, error) {
+func getVlanBrief(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	queriesVlan := [][]string{
 		{"CONFIG_DB", vlanTable},
 	}

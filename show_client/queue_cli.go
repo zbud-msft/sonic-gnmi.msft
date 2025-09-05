@@ -151,10 +151,11 @@ func getQueueCountersSnapshot(ifaces []string, onlyNonZero bool, onlyTrim bool) 
 	return response, nil
 }
 
-func getQueueCounters(options sdc.OptionMap) ([]byte, error) {
-	var ifaces []string
-	if interfaces, ok := options["interfaces"].Strings(); ok {
-		ifaces = interfaces
+func getQueueCounters(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	// TODO: cli only supports one interface provided as an argument not option
+	ifaces := make([]string, 0, 1)
+	if intf := args.At(0); intf != "" {
+		ifaces = append(ifaces, intf)
 	}
 
 	onlyNonZero := false

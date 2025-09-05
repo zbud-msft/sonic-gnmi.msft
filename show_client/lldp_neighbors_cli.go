@@ -252,7 +252,8 @@ func extractNeighborsEntry(iface interfaceEntry) lldpNeighborsEntry {
     return neighbor
 }
 
-func getLLDPNeighbors(options sdc.OptionMap) ([]byte, error) {
+func getLLDPNeighbors(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	// TODO: Needs to use argument
     data, err := getLLDPDataFromHostCommand()
     if err != nil {
         log.Errorf("Failed to get lldp data, get err %v", err)

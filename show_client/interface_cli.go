@@ -12,6 +12,8 @@ import (
 
 	log "github.com/golang/glog"
 	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type InterfaceCountersResponse struct {
@@ -87,12 +89,12 @@ func computeState(iface string, portTable map[string]interface{}) string {
 	}
 }
 
-func getInterfaceCounters(options sdc.OptionMap) ([]byte, error) {
+func getInterfaceCounters(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	var ifaces []string
 	period := 0
 	takeDiffSnapshot := false
 
-	if interfaces, ok := options["interfaces"].Strings(); ok {
+	if interfaces, ok := options["interface"].Strings(); ok {
 		ifaces = interfaces
 	}
 
@@ -258,10 +260,10 @@ var allPortErrors = [][]string{
 	{"no_rx_reachability_count", "no_rx_reachability_time"},
 }
 
-func getInterfaceErrors(options sdc.OptionMap) ([]byte, error) {
-	intf, ok := options["interface"].String()
-	if !ok {
-		return nil, fmt.Errorf("No interface name passed in as option")
+func getInterfaceErrors(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	intf := args.At(0)
+	if intf == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "No interface name passed in as option")
 	}
 
 	// Query Port Operational Errors Table from STATE_DB
@@ -324,8 +326,8 @@ func getIntfsFromConfigDB(intf string) ([]string, error) {
 	return ports, nil
 }
 
-func getInterfaceFecStatus(options sdc.OptionMap) ([]byte, error) {
-	intf, _ := options["interface"].String()
+func getInterfaceFecStatus(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	intf := args.At(0)
 
 	ports, err := getIntfsFromConfigDB(intf)
 	if err != nil {
@@ -727,9 +729,9 @@ func getSubInterfaceStatus(intf string) ([]byte, error) {
 	return json.Marshal(interfaceStatus)
 }
 
-func getInterfaceStatus(options sdc.OptionMap) ([]byte, error) {
+func getInterfaceStatus(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	isSubIntf := false
-	intf, _ := options["interface"].String()
+	intf := args.At(0)
 	if intf != "" {
 		if intf == "subport" {
 			isSubIntf = true
@@ -925,8 +927,8 @@ func getInterfaceStatus(options sdc.OptionMap) ([]byte, error) {
 	return json.Marshal(interfaceStatus)
 }
 
-func getInterfaceAlias(options sdc.OptionMap) ([]byte, error) {
-	intf, _ := options["interface"].String()
+func getInterfaceAlias(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	intf := args.At(0)
 
 	// Read CONFIG_DB.PORT
 	queries := [][]string{{"CONFIG_DB", "PORT"}}
@@ -966,8 +968,9 @@ func getInterfaceAlias(options sdc.OptionMap) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-func getInterfaceSwitchportConfig(options sdc.OptionMap) ([]byte, error) {
-	intf, _ := options["interface"].String()
+func getInterfaceSwitchportConfig(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	// TODO: Need revirw as show cli doesnt support this....
+	intf := args.At(0)
 
 	// Read CONFIG_DB tables
 	portTbl, err := GetMapFromQueries([][]string{{"CONFIG_DB", "PORT"}})
@@ -1062,8 +1065,9 @@ func getInterfaceSwitchportConfig(options sdc.OptionMap) ([]byte, error) {
 	return json.Marshal(switchportConfig)
 }
 
-func getInterfaceSwitchportStatus(options sdc.OptionMap) ([]byte, error) {
-	intf, _ := options["interface"].String()
+func getInterfaceSwitchportStatus(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	// TODO: CLI discrepancy
+	intf := args.At(0)
 
 	// Read CONFIG_DB tables
 	portTbl, err := GetMapFromQueries([][]string{{"CONFIG_DB", "PORT"}})
@@ -1144,8 +1148,8 @@ func IsInterfaceInPortchannel(portchannelMemberTable map[string]interface{}, int
 	return false
 }
 
-func getInterfaceFlap(options sdc.OptionMap) ([]byte, error) {
-	intf, _ := options["interface"].String()
+func getInterfaceFlap(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
+	intf := args.At(0)
 
 	// Query APPL_DB PORT_TABLE
 	queries := [][]string{

@@ -41,6 +41,37 @@ func (spcfg ShowPathConfig) ParseOptions(path *gnmipb.Path) (OptionMap, error) {
 	return validateOptions(passedOptions, spcfg.options)
 }
 
+func (spcfg ShowPathConfig) ParseArgs(path *gnmipb.Path) (CmdArgs, error) {
+	pathArr := pathToArr(path)
+	if spcfg.maxArgs < -1 {
+		return nil, status.Errorf(codes.Internal, "invalid number of max args: must be greater or equal to -1 (any # of args): %d", spcfg.maxArgs)
+	}
+	if spcfg.regLen <= 0 {
+		return nil, status.Errorf(codes.Internal, "invalid config: registered prefix length: %d", spcfg.regLen)
+	}
+	argStartIndex := spcfg.regLen - 1 // args start after registered prefix
+	if argStartIndex < 0 || argStartIndex > len(pathArr) {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid path: expected atleast %d elements after target, got: %d", spcfg.regLen - 1, len(pathArr))
+	}
+	numArgs := len(pathArr) - argStartIndex
+	if spcfg.maxArgs >= 0 && numArgs > spcfg.maxArgs {
+
+		return nil, status.Errorf(codes.InvalidArgument, "invalid number of arguments provided: must be less than or equal to %d", spcfg.maxArgs)
+	}
+	return CmdArgs(pathArr[argStartIndex:]), nil
+}
+
+func pathToArr(path *gnmipb.Path) []string {
+	out := make([]string, 0)
+	if path != nil {
+		elems := path.GetElem()
+		for _, elem := range elems {
+			out = append(out, elem.GetName())
+		}
+	}
+	return out
+}
+
 func validateOptions(passedOptions map[string]string, options map[string]ShowCmdOption) (OptionMap, error) {
 	optionMap := make(OptionMap)
 	// Validate that mandatory options exist and unimplemented options are errored out and validate proper typing for each option
@@ -110,9 +141,10 @@ func checkOptionsInPath(path *gnmipb.Path, options map[string]ShowCmdOption) (ma
 	return passedOptions, nil
 }
 
-func constructDescription(subcommandDesc map[string]string, options map[string]ShowCmdOption) map[string]map[string]string {
+func constructDescription(usage string, subcommandDesc map[string]string, options map[string]ShowCmdOption) map[string]map[string]string {
 	description := make(map[string]map[string]string)
 	description["options"] = make(map[string]string)
+	description["usage"] = make(map[string]string)
 
 	for _, option := range options {
 		// Base description
@@ -127,6 +159,7 @@ func constructDescription(subcommandDesc map[string]string, options map[string]S
 	}
 
 	description["subcommands"] = subcommandDesc
+	description["usage"]["desc"] = usage
 	return description
 }
 

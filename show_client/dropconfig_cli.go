@@ -13,7 +13,7 @@ import (
 // 2) "[MPLS_MISS,FDB_AND_BLACKHOLE_DISCARDS,IP_HEADER_ERROR,L3_EGRESS_LINK_DOWN,EXCEEDS_L3_MTU,DIP_LINK_LOCAL,SIP_LINK_LOCAL,ACL_ANY,SMAC_EQUALS_DMAC]"
 // 3) "count"
 // 4) "10"
-func getDropcountersCapabilities(options sdc.OptionMap) ([]byte, error) {
+func getDropcountersCapabilities(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	queries := [][]string{
 		{"STATE_DB", "DEBUG_COUNTER_CAPABILITIES", "*"},
 	}

@@ -13,13 +13,15 @@ import (
 
 var showTrie *Trie = NewTrie()
 
-func RegisterCliPath(path []string, getter DataGetter, subcommandDesc map[string]string, options ...ShowCmdOption) {
+func RegisterCliPath(path []string, getter DataGetter, usageDesc string, maxArgs int, subcommandDesc map[string]string, options ...ShowCmdOption) {
 	pathOptions := constructOptions(options)
-	pathDescription := constructDescription(subcommandDesc, pathOptions)
+	pathDescription := constructDescription(usageDesc, subcommandDesc, pathOptions)
 	config := ShowPathConfig{
 		dataGetter:  getter,
 		options:     pathOptions,
 		description: pathDescription,
+		maxArgs:     maxArgs,
+		regLen:      len(path),
 	}
 	n := showTrie.Add(path, config)
 	if _, ok := n.meta.(ShowPathConfig); !ok {
@@ -56,7 +58,7 @@ func lookupPathConfig(prefix, path *gnmipb.Path) (ShowPathConfig, error) {
 			stringSlice = append(stringSlice, elem.GetName())
 		}
 	}
-	n, ok := showTrie.Find(stringSlice)
+	n, ok := showTrie.FindLongestPrefix(stringSlice)
 	if ok {
 		config := n.meta.(ShowPathConfig)
 		return config, nil
@@ -93,6 +95,11 @@ func (c *ShowClient) Get(w *sync.WaitGroup) ([]*spb.Value, error) {
 	for gnmiPath, config := range c.path2Config {
 		getter := config.dataGetter
 		description := config.description
+		// Validate arguments in path
+		validatedArgs, err := config.ParseArgs(gnmiPath)
+		if err != nil {
+			return nil, err
+		}
 		// Validate and verify all passed options
 		validatedOptions, err := config.ParseOptions(gnmiPath)
 		if err != nil {
@@ -102,7 +109,7 @@ func (c *ShowClient) Get(w *sync.WaitGroup) ([]*spb.Value, error) {
 		if needHelp, ok := validatedOptions["help"].Bool(); ok && needHelp {
 			return showHelp(c.prefix, gnmiPath, description)
 		}
-		v, err := getter(validatedOptions)
+		v, err := getter(validatedArgs, validatedOptions)
 		if err != nil {
 			log.V(3).Infof("GetData error %v for %v", err, v)
 			return nil, err

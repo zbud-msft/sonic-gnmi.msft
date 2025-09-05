@@ -115,7 +115,7 @@ func extractTableEntry(iface interfaceEntry) lldpTableEntry {
     return neighbor
 }
 
-func getLLDPTable(options sdc.OptionMap) ([]byte, error) {
+func getLLDPTable(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
     // get lldp data
     data, err := getLLDPDataFromHostCommand()
     if err != nil {
