@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import shlex
 import sys
 import argparse
@@ -10,52 +11,16 @@ SHORT_OPTION_ERROR = "Short options are not supported"
 INVALID_OPTION_TOKEN_ERROR = "Invalid option token: --"
 INVALID_LONG_OPTION_ERROR = "Invalid long option '--'"
 
-ESCAPABLE = frozenset({"/", "[", "]", "=", "\\"})
-
-
 class OptionException(Exception):
-    """Raised for option/command validation errors (not parsing syntax)."""
     pass
 
-
 def escape_gnmi(text: str) -> str:
-    """
-    Escape gNMI special characters using a single ESCAPABLE set:
-      - If '\' precedes an ESCAPABLE char, keep that escape as-is.
-      - Else a lone '\' becomes '\\\\'.
-      - Any raw / [ ] = get a leading backslash.
-    """
-    out = []
-    i, n = 0, len(text)
-
-    while i < n:
-        ch = text[i]
-
-        if ch == "\\":
-            if i + 1 < n and text[i + 1] in ESCAPABLE:
-                # escaping / [ ] = \
-                out.append("\\")
-                out.append(text[i + 1])
-                i += 2
-            else:
-                # Literal backslash
-                out.append("\\\\")
-                i += 1
-            continue
-
-        if ch in ESCAPABLE:
-            out.append("\\" + ch)
-        else:
-            out.append(ch)
-
-        i += 1
-
-    return "".join(out)
-
+    # Escape only '/' → '\/'
+    return text.replace("/", r"\/")
 
 class ShowCliToGnmiPathConverter:
-    def __init__(self, command: str):
-        self.command = command
+    def __init__(self, tokens):
+        self.tokens = tokens
 
     def parseLongOption(self, token: str):
         # --flag         -> ('flag', 'True')
@@ -71,13 +36,14 @@ class ShowCliToGnmiPathConverter:
             name, value = body.split("=", 1)
             if not name:
                 raise OptionException("Invalid long option: missing name before '='")
+            if "=" in value or "]" in value or "[" in value:
+                raise OptionException("Invalid long option: value cannot contain -,[,]")
             return name, escape_gnmi(value)
 
         return body, "True"
 
     def convert(self) -> str:
-        tokens = shlex.split(self.command)
-
+        tokens = self.tokens
         if not tokens:
             raise OptionException(EMPTY_COMMAND_ERROR)
         if tokens[0].lower() != "show":
@@ -87,56 +53,61 @@ class ShowCliToGnmiPathConverter:
         out = []
 
         for tok in tokens:
-            # Reject short options
             if tok.startswith("-") and not tok.startswith("--"):
                 raise OptionException(f"{SHORT_OPTION_ERROR}: '{tok}'")
 
             if tok.startswith("--"):
-                # Option before any paths
                 if not out:
                     raise ValueError("Option before first path segment")
                 key, val = self.parseLongOption(tok)
                 out.append(f"[{key}={val}]")
                 continue
 
+            if "=" in tok or "]" in tok or "[" in tok:
+                raise ValueError("Invalid characters inside of non option")
+
             if out:
                 out.append("/")
             out.append(escape_gnmi(tok))
 
         if not out:
-            # No segments at all
             raise OptionException(NO_PATH_ERROR)
-
         return "".join(out)
-
 
 def main():
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument(
-        "-c",
-        "--command",
-        nargs="?",
-        const="",
-        default="",
-        help='Command string starting with "show", e.g. "show foo bar --key=value"',
+        "-f", "--file", required=True,
+        help="Path to a file containing one 'show ...' command per line"
     )
     args = parser.parse_args()
 
-    if args.command == "":
-        print(NO_COMMAND_ERROR, file=sys.stderr)
+    had_error = False
+    try:
+        with open(args.file, "r", encoding="utf-8") as showfile:
+            for lineno, raw in enumerate(showfile, 1):
+                line = raw.rstrip("\n")
+                if not line.strip():
+                    continue
+                try:
+                    # shlex will unescape '\' by default
+                    tokens = shlex.split(line)
+                    result = ShowCliToGnmiPathConverter(tokens).convert()
+                    print(result)
+                except OptionException as e:
+                    print(f"{args.file}:{lineno}: {e}", file=sys.stderr)
+                    had_error = True
+                except ValueError as e:
+                    print(f"{args.file}:{lineno}: failed to parse command: {e}", file=sys.stderr)
+                    had_error = True
+    except FileNotFoundError:
+        print(f"File not found: {args.file}", file=sys.stderr)
+        sys.exit(2)
+    except OSError as e:
+        print(f"Failed to read file '{args.file}': {e}", file=sys.stderr)
         sys.exit(2)
 
-    try:
-        result = ShowCliToGnmiPathConverter(args.command).convert()
-    except OptionException as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
-    except ValueError as e:
-        print(f"failed to parse command: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    print(result)
-
+    sys.exit(1 if had_error else 0)
 
 if __name__ == "__main__":
     main()
