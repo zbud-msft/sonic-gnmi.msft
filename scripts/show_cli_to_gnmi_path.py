@@ -14,6 +14,11 @@ INVALID_LONG_OPTION_ERROR = "Invalid long option '--'"
 class OptionException(Exception):
     pass
 
+def has_special_char(text: str) -> bool:
+    if "=" in text or "]" in text or "[" in text:
+        return True
+    return False
+
 def escape_gnmi(text: str) -> str:
     # Escape only '/' → '\/'
     return text.replace("/", r"\/")
@@ -36,8 +41,8 @@ class ShowCliToGnmiPathConverter:
             name, value = body.split("=", 1)
             if not name:
                 raise OptionException("Invalid long option: missing name before '='")
-            if "=" in value or "]" in value or "[" in value:
-                raise OptionException("Invalid long option: value cannot contain -,[,]")
+            if has_special_char(name) or has_special_char(value):
+                raise OptionException("Invalid long option: key/value cannot contain =,[,]")
             return name, escape_gnmi(value)
 
         return body, "True"
@@ -63,7 +68,7 @@ class ShowCliToGnmiPathConverter:
                 out.append(f"[{key}={val}]")
                 continue
 
-            if "=" in tok or "]" in tok or "[" in tok:
+            if has_special_char(tok):
                 raise ValueError("Invalid characters inside of non option")
 
             if out:
