@@ -15,9 +15,7 @@ class OptionException(Exception):
     pass
 
 def has_special_char(text: str) -> bool:
-    if "=" in text or "]" in text or "[" in text:
-        return True
-    return False
+    return "=" in text or "]" in text or "[" in text
 
 def escape_gnmi(text: str) -> str:
     # Escape only '/' → '\/'
