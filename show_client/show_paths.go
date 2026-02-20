@@ -935,6 +935,16 @@ func init() {
 		showCmdOptionVerbose,
 	)
 
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "mirror_session"},
+		getMirrorSession,
+		"SHOW/mirror_session/{SESSION_NAME}[OPTIONS]: Show mirror session configuration",
+		0,
+		1,
+		nil,
+		showCmdOptionVerbose,
+  )
+  
 	// SHOW/platform/summary
 	sdc.RegisterCliPath(
 		[]string{"SHOW", "platform", "summary"},
