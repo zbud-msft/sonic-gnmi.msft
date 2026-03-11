@@ -2,14 +2,24 @@ package gnmi
 
 import (
 	"bytes"
+	"context"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Azure/sonic-mgmt-common/translib"
 	"github.com/sonic-net/sonic-gnmi/common_utils"
+	"github.com/sonic-net/sonic-gnmi/pkg/bypass"
+	operationalhandler "github.com/sonic-net/sonic-gnmi/pkg/server/operational-handler"
 	spb "github.com/sonic-net/sonic-gnmi/proto"
 	spb_gnoi "github.com/sonic-net/sonic-gnmi/proto/gnoi"
 	spb_jwt_gnoi "github.com/sonic-net/sonic-gnmi/proto/gnoi/jwt"
@@ -21,17 +31,28 @@ import (
 	"github.com/golang/protobuf/proto"
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	gnmi_extpb "github.com/openconfig/gnmi/proto/gnmi_ext"
+	gnoi_containerz_pb "github.com/openconfig/gnoi/containerz"
+	"github.com/openconfig/gnoi/factory_reset"
 	gnoi_system_pb "github.com/openconfig/gnoi/system"
+
 	gnoi_file_pb "github.com/openconfig/gnoi/file"
-	"golang.org/x/net/context"
+	gnoi_healthz_pb "github.com/openconfig/gnoi/healthz"
+	gnoi_os_pb "github.com/openconfig/gnoi/os"
+	gnsi_certz_pb "github.com/openconfig/gnsi/certz"
+	gnoi_debug "github.com/sonic-net/sonic-gnmi/pkg/gnoi/debug"
+	gnoi_debug_pb "github.com/sonic-net/sonic-gnmi/proto/gnoi/debug"
+	testcert "github.com/sonic-net/sonic-gnmi/testdata/tls"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/tls/certprovider"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/security/advancedtls"
 	"google.golang.org/grpc/status"
 )
 
 var (
+	muPath             = &sync.RWMutex{}
 	supportedEncodings = []gnmipb.Encoding{gnmipb.Encoding_JSON, gnmipb.Encoding_JSON_IETF, gnmipb.Encoding_PROTO}
 )
 
@@ -39,11 +60,18 @@ var (
 // via Subscribe or Get will receive a stream of updates based on the requested
 // path. Set request is processed by server too.
 type Server struct {
-	s       *grpc.Server
-	lis     net.Listener
-	config  *Config
-	cMu     sync.Mutex
-	clients map[string]*Client
+	s   *grpc.Server
+	lis net.Listener
+	// udsServer is the gRPC server for Unix domain socket connections (no TLS).
+	// This is nil if UnixSocket is not configured.
+	udsServer *grpc.Server
+	// udsListener is the listener for Unix domain socket connections.
+	// This is nil if UnixSocket is not configured.
+	udsListener   net.Listener
+	config        *Config
+	cMu           sync.Mutex
+	clients       map[string]*Client
+	certProviders []certprovider.Provider
 	// SaveStartupConfig points to a function that is called to save changes of
 	// configuration to a file. By default it points to an empty function -
 	// the configuration is not saved to a file.
@@ -52,8 +80,58 @@ type Server struct {
 	// comes from a master controller.
 	ReqFromMaster func(req *gnmipb.SetRequest, masterEID *uint128) error
 	masterEID     uint128
+	gnoi_system_pb.UnimplementedSystemServer
+	factory_reset.UnimplementedFactoryResetServer
+	gnsiCertz *GNSICertzServer
 }
 
+// handleOperationalGet handles OPERATIONAL target requests directly with standard gNMI types
+func (s *Server) handleOperationalGet(ctx context.Context, req *gnmipb.GetRequest, paths []*gnmipb.Path, prefix *gnmipb.Path) (*gnmipb.GetResponse, error) {
+	// Authentication - use gnoi auth even though this is a gNMI Get operation.
+	// The OPERATIONAL target provides operational state queries (like disk space)
+	// that supplement gNOI services when existing gNOI definitions don't provide
+	// what we need. This allows reusing gnoi_readonly/gnoi_readwrite roles
+	// for operational data access control.
+	authTarget := "gnoi"
+	ctx, err := authenticate(s.config, ctx, authTarget, false)
+	if err != nil {
+		common_utils.IncCounter(common_utils.GNMI_GET_FAIL)
+		return nil, err
+	}
+
+	// Create operational handler
+	operationalHandler, err := operationalhandler.NewOperationalHandler(paths, prefix)
+	if err != nil {
+		common_utils.IncCounter(common_utils.GNMI_GET_FAIL)
+		return nil, status.Error(codes.NotFound, err.Error())
+	}
+	defer operationalHandler.Close()
+
+	// Get data from operational handler
+	values, err := operationalHandler.Get(nil)
+	if err != nil {
+		common_utils.IncCounter(common_utils.GNMI_GET_FAIL)
+		// Handler returns proper status errors, propagate them directly
+		return nil, err
+	}
+
+	// Convert directly to gNMI notifications (no SONiC wrapper!)
+	notifications := make([]*gnmipb.Notification, len(values))
+	for index, value := range values {
+		update := &gnmipb.Update{
+			Path: value.Path,
+			Val:  value.Value,
+		}
+
+		notifications[index] = &gnmipb.Notification{
+			Timestamp: value.Timestamp,
+			Prefix:    prefix,
+			Update:    []*gnmipb.Update{update},
+		}
+	}
+
+	return &gnmipb.GetResponse{Notification: notifications}, nil
+}
 
 // FileServer is the server API for File service.
 // All implementations must embed UnimplementedFileServer
@@ -63,12 +141,41 @@ type FileServer struct {
 	gnoi_file_pb.UnimplementedFileServer
 }
 
-// SystemServer is the server API for System service.
+// OSBackend defines the interface for the OS installation backend service.
+type OSBackend interface {
+	InstallOS(req string) (string, error)
+}
+
+// OSServer is the server API for System service.
 // All implementations must embed UnimplementedSystemServer
 // for forward compatibility
-type SystemServer struct {
+type OSServer struct {
 	*Server
-	gnoi_system_pb.UnimplementedSystemServer
+	backend OSBackend // Dependency interface
+	ImgDir  string
+	gnoi_os_pb.UnimplementedOSServer
+}
+
+// ContainerzServer is the server API for Containerz service.
+type ContainerzServer struct {
+	server *Server
+	gnoi_containerz_pb.UnimplementedContainerzServer
+}
+
+// DebugServer is the server API for Debug service.
+type DebugServer struct {
+	*Server
+	readWhitelist  []string
+	writeWhitelist []string
+	gnoi_debug_pb.UnimplementedDebugServer
+}
+
+// HealthzServer is the server API for System Health service.
+// All implementations must embed UnimplementedSystemServer
+// for forward compatibility
+type HealthzServer struct {
+	*Server
+	gnoi_healthz_pb.UnimplementedHealthzServer
 }
 
 type AuthTypes map[string]bool
@@ -76,18 +183,50 @@ type AuthTypes map[string]bool
 // Config is a collection of values for Server
 type Config struct {
 	// Port for the Server to listen on. If 0 or unset the Server will pick a port
-	// for this Server.
-	Port                int64
+	// for this Server. Port > 0 enables the TCP listener.
+	Port int64
+	// UnixSocket is the path to a Unix domain socket to listen on.
+	// When set, an additional listener is created for local connections without TLS.
+	UnixSocket          string
 	LogLevel            int
 	Threshold           int
 	UserAuth            AuthTypes
 	EnableTranslibWrite bool
 	EnableNativeWrite   bool
+	EnableTranslation   bool
 	ZmqPort             string
 	IdleConnDuration    int
 	ConfigTableName     string
 	Vrf                 string
 	EnableCrl           bool
+	// Path to the directory where image is stored.
+	ImgDir     string
+	GetOptions func(*Config) ([]grpc.ServerOption, []certprovider.Provider, error)
+	// gnsi.certz mTLS flags
+	CaCertLnk     string // Path to symlink pointing to current CA certificate.
+	SrvCertLnk    string // Path to symlink pointing to current server's certificate.
+	SrvKeyLnk     string // Path to symlink pointing to current server's private key.
+	CaCertFile    string // Path to the first CA certificate.
+	SrvCertFile   string // Path to the first server's certificate.
+	SrvKeyFile    string // Path to the first server's private key.
+	CertCRLConfig string // Path to the CRL directory. Disable if empty.
+	IntManFile    string // Path to the Integrity Manifest file.
+	CertzMetaFile string // Path to JSON file with gRPC credential metadata.
+	FedPolicyFile string // Path to federation policy file.
+}
+
+// DBusOSBackend is a concrete implementation of OSBackend
+type DBusOSBackend struct{}
+
+// InstallOS implements the OSBackend interface.
+func (d *DBusOSBackend) InstallOS(req string) (string, error) {
+	log.Infof("DBusOSBackend.InstallOS: %v", req)
+	sc, err := ssc.NewDbusClient()
+	if err != nil {
+		return "", err
+	}
+	defer sc.Close()
+	return sc.InstallOS(req)
 }
 
 var AuthLock sync.Mutex
@@ -161,83 +300,344 @@ func (i AuthTypes) Unset(mode string) error {
 	return nil
 }
 
-// New returns an initialized Server.
-func NewServer(config *Config, opts []grpc.ServerOption) (*Server, error) {
+// registerAllServices registers all gNMI and gNOI services on the given gRPC server.
+func registerAllServices(s *grpc.Server, srv *Server, fileSrv *FileServer,
+	osSrv *OSServer, containerzSrv *ContainerzServer,
+	debugSrv *DebugServer, healthzSrv *HealthzServer, certzSrv *GNSICertzServer) {
+	gnmipb.RegisterGNMIServer(s, srv)
+	factory_reset.RegisterFactoryResetServer(s, srv)
+	gnsi_certz_pb.RegisterCertzServer(s, certzSrv)
+	spb_jwt_gnoi.RegisterSonicJwtServiceServer(s, srv)
+	if srv.config.EnableTranslibWrite || srv.config.EnableNativeWrite {
+		gnoi_system_pb.RegisterSystemServer(s, srv)
+		gnoi_file_pb.RegisterFileServer(s, fileSrv)
+		gnoi_os_pb.RegisterOSServer(s, osSrv)
+		gnoi_containerz_pb.RegisterContainerzServer(s, containerzSrv)
+		gnoi_debug_pb.RegisterDebugServer(s, debugSrv)
+		gnoi_healthz_pb.RegisterHealthzServer(s, healthzSrv)
+	}
+	if srv.config.EnableTranslibWrite {
+		spb_gnoi.RegisterSonicServiceServer(s, srv)
+	}
+	spb_gnoi.RegisterDebugServer(s, srv)
+
+}
+
+// SrvTestConfig returns test mTLS server configuration to be used to start gNMI/gNOI server in test environment.
+func SrvTestConfig(cfg *Config) ([]grpc.ServerOption, []certprovider.Provider, error) {
+	cert, err := testcert.NewCert()
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not generate test server credentials: %s", err)
+	}
+	srvCert := filepath.Dir(cfg.SrvCertLnk) + "/server_test_cert.pem"
+	certBlock := &pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}
+	if err = os.WriteFile(srvCert, pem.EncodeToMemory(certBlock), 0600); err != nil {
+		return nil, nil, err
+	}
+	srvKey := filepath.Dir(cfg.SrvCertLnk) + "/server_test_key.pem"
+	privBytes := x509.MarshalPKCS1PrivateKey(cert.PrivateKey.(*rsa.PrivateKey))
+	keyBlock := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: privBytes}
+	if err = os.WriteFile(srvKey, pem.EncodeToMemory(keyBlock), 0600); err != nil {
+		return nil, nil, err
+	}
+
+	return SrvAdvConfig(cfg)
+}
+
+// SrvAdvConfig returns mTLS server configuration to be used to start gNMI/gNOI server with rotating certificates.
+func SrvAdvConfig(cfg *Config) ([]grpc.ServerOption, []certprovider.Provider, error) {
+	// 1. Safety Check: Ensure link paths are not empty before OS operations.
+	// This prevents os.Stat("") or os.Symlink("", ...) from crashing.
+	if cfg.CaCertLnk == "" {
+		cfg.CaCertLnk = "/keys/ca_cert.lnk"
+	}
+	if cfg.SrvCertLnk == "" {
+		cfg.SrvCertLnk = "/keys/server_cert.lnk"
+	}
+	if cfg.SrvKeyLnk == "" {
+		cfg.SrvKeyLnk = "/keys/server_key.lnk"
+	}
+	muPath.Lock()
+	defer muPath.Unlock()
+
+	log.V(1).Infof("Setting server credentials using: %v; %v; %v; %v; %v; %v;", cfg.CaCertLnk, cfg.CaCertFile, cfg.SrvCertLnk, cfg.SrvCertFile, cfg.SrvKeyLnk, cfg.SrvKeyFile)
+	// CA Certificate Check
+	if cfg.CaCertFile != "" {
+		if _, err := os.Stat(cfg.CaCertFile); err != nil {
+			return nil, nil, fmt.Errorf("CA certificate file not found: %v", err)
+		}
+		if !isSymlinkValid(cfg.CaCertLnk) {
+			atomicSetCACert(cfg, cfg.CaCertFile)
+		}
+	} else {
+		log.V(1).Infof("CaCertFile is empty; client certificate verification will be disabled.")
+	}
+	// Server Certificate & Key Check (Mandatory for TLS)
+	if !isSymlinkValid(cfg.SrvCertLnk) || !isSymlinkValid(cfg.SrvKeyLnk) {
+		if cfg.SrvCertFile == "" || cfg.SrvKeyFile == "" {
+			return nil, nil, fmt.Errorf("server certificate or key file path is empty")
+		}
+		if _, err := os.Stat(cfg.SrvCertFile); err != nil {
+			return nil, nil, fmt.Errorf("server certificate file stat error: %v", err)
+		}
+		if _, err := os.Stat(cfg.SrvKeyFile); err != nil {
+			return nil, nil, fmt.Errorf("server key file stat error: %v", err)
+		}
+		atomicSetSrvCertKeyPair(cfg, cfg.SrvCertFile, cfg.SrvKeyFile)
+	}
+
+	providers := []certprovider.Provider{}
+	identityOptions := advancedtls.IdentityCertificateOptions{
+		// Read the certificate and the key for every new connection.
+		GetIdentityCertificatesForServer: func(*tls.ClientHelloInfo) ([]*tls.Certificate, error) {
+			muPath.RLock()
+			defer muPath.RUnlock()
+
+			cert, err := tls.LoadX509KeyPair(cfg.SrvCertLnk, cfg.SrvKeyLnk)
+			if err != nil {
+				return nil, fmt.Errorf("could not load server key pair: %s", err)
+			}
+			return []*tls.Certificate{&cert}, nil
+		},
+	}
+
+	serverOption := &advancedtls.Options{
+		IdentityOptions: identityOptions,
+		AdditionalPeerVerification: func(params *advancedtls.HandshakeVerificationInfo) (*advancedtls.PostHandshakeVerificationResults, error) {
+			return &advancedtls.PostHandshakeVerificationResults{}, nil
+		},
+		RequireClientCert: false,
+		VerificationType:  advancedtls.SkipVerification,
+	}
+	if cfg.CaCertFile != "" {
+		serverOption.RootOptions = advancedtls.RootCertificateOptions{
+			// Read the CA certificate for every new connection.
+			GetRootCertificates: func(params *advancedtls.ConnectionInfo) (*advancedtls.RootCertificates, error) {
+				muPath.RLock()
+				defer muPath.RUnlock()
+
+				caCertPem, err := os.ReadFile(cfg.CaCertLnk)
+				if err != nil {
+					return nil, fmt.Errorf("could not read CA certificate: %s", err)
+				}
+				certPool := x509.NewCertPool()
+				if ok := certPool.AppendCertsFromPEM(caCertPem); !ok {
+					return nil, fmt.Errorf("failed to append CA certificate")
+				}
+				return &advancedtls.RootCertificates{TrustCerts: certPool}, nil
+			},
+		}
+		// If the server want the client to send certificates.
+		serverOption.RequireClientCert = true
+		// Doing only the certificate check.
+		serverOption.VerificationType = advancedtls.CertVerification
+		// CRL config.
+		if cfg.CertCRLConfig != "" {
+			if _, err := os.ReadDir(filepath.Join(cfg.CertCRLConfig, "crl")); err != nil {
+				return nil, nil, err
+			}
+			p, err := advancedtls.NewFileWatcherCRLProvider(advancedtls.FileWatcherOptions{
+				CRLDirectory:    filepath.Join(cfg.CertCRLConfig, "crl"),
+				RefreshDuration: time.Minute,
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			serverOption.RevocationOptions = &advancedtls.RevocationOptions{
+				DenyUndetermined: false,
+				CRLProvider:      p,
+			}
+		}
+	}
+	serverCreds, err := advancedtls.NewServerCreds(serverOption)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []grpc.ServerOption{grpc.Creds(serverCreds)}, providers, nil
+}
+
+// NewServer returns an initialized Server.
+//
+// tlsOpts contains TLS credentials and is used only for the TCP listener.
+// commonOpts contains interceptors, keepalive params, etc. and is used for both listeners.
+//
+// When config.Port > 0, a TCP listener is created with TLS.
+// When config.UnixSocket is set, an additional UDS listener is created without TLS.
+func NewServer(config *Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*Server, error) {
 	if config == nil {
 		return nil, errors.New("config not provided")
 	}
+	var providers []certprovider.Provider
 	common_utils.InitCounters()
 
-	s := grpc.NewServer(opts...)
-	reflection.Register(s)
-
 	srv := &Server{
-		s:                 s,
 		config:            config,
 		clients:           map[string]*Client{},
+		certProviders:     providers,
 		SaveStartupConfig: saveOnSetDisabled,
-		// ReqFromMaster point to a function that is called to verify if
-		// the request comes from a master controller.
-		ReqFromMaster: ReqFromMasterDisabledMA,
-		masterEID:     uint128{High: 0, Low: 0},
+		ReqFromMaster:     ReqFromMasterDisabledMA,
+		masterEID:         uint128{High: 0, Low: 0},
 	}
 
+	// Create service servers (shared between TCP and UDS)
 	fileSrv := &FileServer{Server: srv}
-	systemSrv := &SystemServer{Server: srv}
+	osBackend := &DBusOSBackend{}
+	osSrv := &OSServer{
+		Server:  srv,
+		backend: osBackend,
+		ImgDir:  srv.config.ImgDir,
+	}
+	containerzSrv := &ContainerzServer{server: srv}
+	healthzSrv := &HealthzServer{Server: srv}
+	readWhitelist, writeWhitelist := gnoi_debug.ConstructWhitelists()
+	debugSrv := &DebugServer{
+		Server:         srv,
+		readWhitelist:  readWhitelist,
+		writeWhitelist: writeWhitelist,
+	}
+	certzSrv := NewGNSICertzServer(srv)
+	srv.gnsiCertz = certzSrv
 
 	var err error
-	if srv.config.Port < 0 {
-		srv.config.Port = 0
+
+	// TCP Server (Port > 0)
+	if config.Port > 0 {
+		tcpOpts := append(tlsOpts, commonOpts...)
+		srv.s = grpc.NewServer(tcpOpts...)
+		reflection.Register(srv.s)
+
+		srv.lis, err = net.Listen("tcp", fmt.Sprintf(":%d", config.Port))
+		if err != nil {
+			return nil, fmt.Errorf("failed to open listener port %d: %v", config.Port, err)
+		}
+
+		registerAllServices(srv.s, srv, fileSrv, osSrv, containerzSrv, debugSrv, healthzSrv, certzSrv)
 	}
-	srv.lis, err = net.Listen("tcp", fmt.Sprintf(":%d", srv.config.Port))
-	if err != nil {
-		return nil, fmt.Errorf("failed to open listener port %d: %v", srv.config.Port, err)
+
+	// UDS Server (UnixSocket set)
+	if config.UnixSocket != "" {
+		// UDS server uses only commonOpts (no TLS)
+		srv.udsServer = grpc.NewServer(commonOpts...)
+		reflection.Register(srv.udsServer)
+
+		// Create socket directory if it doesn't exist (0750 to prevent unauthorized access
+		// during the window between socket creation and permission setting)
+		socketDir := filepath.Dir(config.UnixSocket)
+		if err := os.MkdirAll(socketDir, 0750); err != nil {
+			if srv.lis != nil {
+				srv.lis.Close()
+			}
+			return nil, fmt.Errorf("failed to create socket directory %s: %v", socketDir, err)
+		}
+
+		os.Remove(config.UnixSocket) // Remove stale socket
+		srv.udsListener, err = net.Listen("unix", config.UnixSocket)
+		if err != nil {
+			// Cleanup TCP listener if it was created
+			if srv.lis != nil {
+				srv.lis.Close()
+			}
+			return nil, fmt.Errorf("failed to listen on unix socket %s: %v", config.UnixSocket, err)
+		}
+		// Restrict socket access to container user (root) and group
+		if err := os.Chmod(config.UnixSocket, 0660); err != nil {
+			log.Warningf("Failed to set permissions on unix socket %s: %v; disabling UDS listener", config.UnixSocket, err)
+			srv.udsListener.Close()
+			os.Remove(config.UnixSocket)
+			srv.udsListener = nil
+			srv.udsServer = nil
+		} else {
+			registerAllServices(srv.udsServer, srv, fileSrv, osSrv, containerzSrv, debugSrv, healthzSrv, certzSrv)
+		}
 	}
-	gnmipb.RegisterGNMIServer(srv.s, srv)
-	spb_jwt_gnoi.RegisterSonicJwtServiceServer(srv.s, srv)
-	if srv.config.EnableTranslibWrite || srv.config.EnableNativeWrite {
-		gnoi_system_pb.RegisterSystemServer(srv.s, systemSrv)
-		gnoi_file_pb.RegisterFileServer(srv.s, fileSrv)
+
+	// Require at least one listener
+	if srv.lis == nil && srv.udsListener == nil {
+		return nil, errors.New("no listener configured: port must be > 0 or unix_socket must be set")
 	}
-	if srv.config.EnableTranslibWrite {
-		spb_gnoi.RegisterSonicServiceServer(srv.s, srv)
-	}
-	spb_gnoi.RegisterDebugServer(srv.s, srv)
+
 	log.V(1).Infof("Created Server on %s, read-only: %t", srv.Address(), !srv.config.EnableTranslibWrite)
 	return srv, nil
 }
 
 // Serve will start the Server serving and block until closed.
+// If both TCP and UDS listeners are configured, both are served concurrently.
 func (srv *Server) Serve() error {
-	s := srv.s
-	if s == nil {
+	if srv.s == nil && srv.udsServer == nil {
 		return fmt.Errorf("Serve() failed: not initialized")
 	}
-	return srv.s.Serve(srv.lis)
+
+	errChan := make(chan error, 2)
+
+	// Start TCP server if configured
+	if srv.s != nil && srv.lis != nil {
+		go func() {
+			log.V(1).Infof("Starting TCP server on %s", srv.lis.Addr().String())
+			err := srv.s.Serve(srv.lis)
+			if err != nil {
+				errChan <- fmt.Errorf("TCP server: %w", err)
+			} else {
+				errChan <- nil
+			}
+		}()
+	}
+
+	// Start UDS server if configured
+	if srv.udsServer != nil && srv.udsListener != nil {
+		go func() {
+			log.V(1).Infof("Starting UDS server on %s", srv.udsListener.Addr().String())
+			err := srv.udsServer.Serve(srv.udsListener)
+			if err != nil {
+				errChan <- fmt.Errorf("UDS server: %w", err)
+			} else {
+				errChan <- nil
+			}
+		}()
+	}
+
+	// Block until first error (or server stop)
+	return <-errChan
 }
 
+// ForceStop stops the server immediately without waiting for connections to close.
 func (srv *Server) ForceStop() {
-	s := srv.s
-	if s == nil {
-		log.Errorf("ForceStop() failed: not initialized")
-		return
+	if srv.s != nil {
+		srv.s.Stop()
 	}
-	s.Stop()
+	if srv.udsServer != nil {
+		srv.udsServer.Stop()
+	}
+	// Cleanup UDS socket file
+	if srv.config != nil && srv.config.UnixSocket != "" {
+		os.Remove(srv.config.UnixSocket)
+	}
 }
 
+// Stop gracefully stops the server, waiting for active connections to close.
 func (srv *Server) Stop() {
-	s := srv.s
-	if s == nil {
-		log.Errorf("Stop() failed: not initialized")
-		return
+	if srv.s != nil {
+		srv.s.GracefulStop()
 	}
-	s.GracefulStop()
+	if srv.udsServer != nil {
+		srv.udsServer.GracefulStop()
+	}
+	// Cleanup UDS socket file
+	if srv.config != nil && srv.config.UnixSocket != "" {
+		os.Remove(srv.config.UnixSocket)
+	}
 }
 
-// Address returns the port the Server is listening to.
+// Address returns the addresses the Server is listening on.
 func (srv *Server) Address() string {
-	addr := srv.lis.Addr().String()
-	return strings.Replace(addr, "[::]", "localhost", 1)
+	var addrs []string
+	if srv.lis != nil {
+		addr := srv.lis.Addr().String()
+		addrs = append(addrs, strings.Replace(addr, "[::]", "localhost", 1))
+	}
+	if srv.udsListener != nil {
+		addrs = append(addrs, srv.udsListener.Addr().String())
+	}
+	return strings.Join(addrs, ", ")
 }
 
 // Port returns the port the Server is listening to.
@@ -433,18 +833,21 @@ func (s *Server) Get(ctx context.Context, req *gnmipb.GetRequest) (*gnmipb.GetRe
 
 	var dc sdc.Client
 	var err error
-	authTarget := "gnmi"
+	// Handle OPERATIONAL target directly without SONiC routing
+	if target == "OPERATIONAL" {
+		return s.handleOperationalGet(ctx, req, paths, prefix)
+	}
 
+	authTarget := "gnmi"
 	if target == "OTHERS" {
 		dc, err = sdc.NewNonDbClient(paths, prefix)
-
+		authTarget = "gnmi_other"
 	} else if target == "SHOW" {
 		dc, err = sdc.NewShowClient(paths, prefix)
-
+		authTarget = "gnmi_show"
 	} else if targetDbName, ok, _, _ := sdc.IsTargetDb(target); ok {
 		dc, err = sdc.NewDbClient(paths, prefix)
 		authTarget = "gnmi_" + targetDbName
-
 	} else {
 		if origin == "" {
 			origin, err = ParseOrigin(paths)
@@ -578,6 +981,18 @@ func (s *Server) Set(ctx context.Context, req *gnmipb.SetRequest) (*gnmipb.SetRe
 			common_utils.IncCounter(common_utils.GNMI_SET_FAIL)
 			return nil, grpc.Errorf(codes.Unimplemented, "GNMI native write is disabled")
 		}
+
+		// Fast path: bypass validation for allowed tables/SKUs
+		allUpdates := append(req.GetReplace(), req.GetUpdate()...)
+		if resp, used, err := bypass.TrySet(ctx, prefix, req.GetDelete(), allUpdates); used {
+			if err != nil {
+				common_utils.IncCounter(common_utils.GNMI_SET_FAIL)
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+			common_utils.IncCounter(common_utils.GNMI_SET_BYPASS)
+			return resp, nil
+		}
+
 		var targetDbName string
 		dc, err = sdc.NewMixedDbClient(paths, prefix, origin, encoding, s.config.ZmqPort, s.config.Vrf, &targetDbName)
 		authTarget = "gnmi_" + targetDbName
@@ -768,4 +1183,16 @@ func ReqFromMasterEnabledMA(req *gnmipb.SetRequest, masterEID *uint128) error {
 // is disabled.
 func ReqFromMasterDisabledMA(req *gnmipb.SetRequest, masterEID *uint128) error {
 	return nil
+}
+
+func cleanupProviders(ps []certprovider.Provider) {
+	for _, p := range ps {
+		p.Close()
+	}
+}
+
+// Cleanup stops the gNMI/gNOI server and does required cleanup.
+func (srv *Server) Cleanup() {
+	srv.s.Stop()
+	cleanupProviders(srv.certProviders)
 }

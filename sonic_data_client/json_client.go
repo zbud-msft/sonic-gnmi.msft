@@ -1,12 +1,12 @@
 package client
 
 import (
-	"os"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
-	"io/ioutil"
-	"encoding/json"
 
 	log "github.com/golang/glog"
 )
@@ -78,7 +78,7 @@ func DecodeJsonListItem(list []interface{}, index string) (*string, error) {
 	return nil, fmt.Errorf("Invalid item %v", vitem)
 }
 
-func NewJsonClient(fileName string) (*JsonClient, error) {
+func NewJsonClient(fileName string, nameSpace string) (*JsonClient, error) {
 	var client JsonClient
 
 	jsonFile, err := os.Open(fileName)
@@ -86,9 +86,9 @@ func NewJsonClient(fileName string) (*JsonClient, error) {
 		return nil, err
 	}
 	defer jsonFile.Close()
- 
+
 	jsonData, err := ioutil.ReadAll(jsonFile)
-	if err!= nil {
+	if err != nil {
 		return nil, err
 	}
 	res, err := parseJson([]byte(jsonData))
@@ -96,18 +96,34 @@ func NewJsonClient(fileName string) (*JsonClient, error) {
 		return nil, err
 	}
 	var ok bool
-	client.jsonData, ok = res.(map[string]interface{})
+	jsonMap, ok := res.(map[string]interface{})
 	if !ok {
 		log.V(2).Infof("Invalid checkpoint %v", fileName)
 		return nil, fmt.Errorf("Invalid checkpoint %v", fileName)
+	}
+	// Check namespace for multi-asic device
+	if nameSpace == "" {
+		client.jsonData = jsonMap
+	} else {
+		res, ok = jsonMap[nameSpace]
+		if ok {
+			client.jsonData, ok = res.(map[string]interface{})
+			if !ok {
+				log.V(2).Infof("Invalid namespace %v", nameSpace)
+				return nil, fmt.Errorf("Invalid namespace %v", nameSpace)
+			}
+		} else {
+			log.V(2).Infof("Unexpected namespace %v", nameSpace)
+			return nil, fmt.Errorf("Unexpected namespace %v", nameSpace)
+		}
 	}
 
 	return &client, nil
 }
 
-func FixPath(path []string) (ret []string){
+func FixPath(path []string) (ret []string) {
 	// Jsonpatch uses "~1" to support "/" in path
-	// Replace "~1" to compare json data 
+	// Replace "~1" to compare json data
 	if len(path) >= 2 {
 		path[1] = strings.ReplaceAll(path[1], "~1", "/")
 	}
@@ -307,7 +323,7 @@ func (c *JsonClient) Add(path []string, value string) error {
 		log.V(2).Infof("Invalid db table Path %v", path)
 		return fmt.Errorf("Invalid db table Path %v", path)
 	}
-		
+
 	return nil
 }
 

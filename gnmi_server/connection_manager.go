@@ -1,14 +1,16 @@
 package gnmi
 
 import (
-	"sync"
-	"time"
+	"context"
 	"net"
 	"regexp"
-	log "github.com/golang/glog"
+	"sync"
+	"time"
 
-	"github.com/go-redis/redis"
 	sdcfg "github.com/sonic-net/sonic-gnmi/sonic_db_config"
+
+	log "github.com/golang/glog"
+	"github.com/redis/go-redis/v9"
 )
 
 const table = "TELEMETRY_CONNECTIONS"
@@ -16,9 +18,9 @@ const table = "TELEMETRY_CONNECTIONS"
 var rclient *redis.Client
 
 type ConnectionManager struct {
-	connections  map[string]struct{}
-	mu           sync.RWMutex
-	threshold    int
+	connections map[string]struct{}
+	mu          sync.RWMutex
+	threshold   int
 }
 
 func (cm *ConnectionManager) GetThreshold() int {
@@ -45,19 +47,19 @@ func (cm *ConnectionManager) PrepareRedis() {
 		DialTimeout: 0,
 	})
 
-	res, _ := rclient.HGetAll("TELEMETRY_CONNECTIONS").Result()
+	res, _ := rclient.HGetAll(context.Background(), "TELEMETRY_CONNECTIONS").Result()
 
 	if res == nil {
 		return
 	}
 
 	for key, _ := range res {
-		rclient.HDel(table, key)
+		rclient.HDel(context.Background(), table, key)
 	}
 }
 
 func (cm *ConnectionManager) Add(addr net.Addr, query string) (string, bool) {
-	cm.mu.RLock() // reading
+	cm.mu.RLock()                                                 // reading
 	if len(cm.connections) >= cm.threshold && cm.threshold != 0 { // 0 is defined as no threshold
 		log.V(1).Infof("Cannot add another client connection as threshold is already at limit")
 		cm.mu.RUnlock()
@@ -73,7 +75,7 @@ func (cm *ConnectionManager) Add(addr net.Addr, query string) (string, bool) {
 	return key, true
 }
 
-func (cm *ConnectionManager) Remove(key string) (bool) {
+func (cm *ConnectionManager) Remove(key string) bool {
 	cm.mu.RLock() // reading
 	_, exists := cm.connections[key]
 	cm.mu.RUnlock()
@@ -109,8 +111,7 @@ func storeKeyRedis(key string) {
 		log.V(1).Infof("Redis client is nil, cannot store connection key")
 		return
 	}
-	ret, err := rclient.HSet(table, key, "active").Result()
-	if !ret {
+	if _, err := rclient.HSet(context.Background(), table, key, "active").Result(); err != nil {
 		log.V(1).Infof("Subscribe client failed to update telemetry connection key:%s err:%v", key, err)
 	}
 }
@@ -121,7 +122,7 @@ func deleteKeyRedis(key string) {
 		return
 	}
 
-	ret, err := rclient.HDel(table, key).Result()
+	ret, err := rclient.HDel(context.Background(), table, key).Result()
 	if ret == 0 {
 		log.V(1).Infof("Subscribe client failed to delete telemetry connection key:%s err:%v", key, err)
 	}

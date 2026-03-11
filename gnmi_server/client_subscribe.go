@@ -2,18 +2,18 @@ package gnmi
 
 import (
 	"fmt"
+
+	"github.com/Workiva/go-datastructures/queue"
+	log "github.com/golang/glog"
+	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
+	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"io"
 	"net"
 	"strings"
 	"sync"
-
-	"github.com/Workiva/go-datastructures/queue"
-	log "github.com/golang/glog"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
-	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 )
 
 // Client contains information about a subscribe client that has connected to the server.
@@ -29,9 +29,9 @@ type Client struct {
 	q         *queue.PriorityQueue
 	subscribe *gnmipb.SubscriptionList
 	// Wait for all sub go routine to finish
-	w     sync.WaitGroup
-	fatal bool
-	logLevel   int
+	w        sync.WaitGroup
+	fatal    bool
+	logLevel int
 }
 
 // Syslog level for error
@@ -45,8 +45,8 @@ var connectionManager *ConnectionManager
 func NewClient(addr net.Addr) *Client {
 	pq := queue.NewPriorityQueue(1, false)
 	return &Client{
-		addr: addr,
-		q:    pq,
+		addr:     addr,
+		q:        pq,
 		logLevel: logLevelError,
 	}
 }
@@ -59,9 +59,9 @@ func (c *Client) setConnectionManager(threshold int) {
 	if connectionManager != nil && threshold == connectionManager.GetThreshold() {
 		return
 	}
-	connectionManager = &ConnectionManager {
-			connections: make(map[string]struct{}),
-			threshold:   threshold,
+	connectionManager = &ConnectionManager{
+		connections: make(map[string]struct{}),
+		threshold:   threshold,
 	}
 	connectionManager.PrepareRedis()
 }
@@ -177,8 +177,7 @@ func (c *Client) Run(stream gnmipb.GNMI_SubscribeServer, config *Config) (err er
 		dc, err = sdc.NewNonDbClient(paths, prefix)
 		authTarget = "gnmi_others"
 	} else if target == "SHOW" {
-		dc, err = sdc.NewShowClient(paths, prefix)
-		authTarget = "gnmi_show"
+		return grpc.Errorf(codes.Unimplemented, "SHOW does not support subscribe operations")
 	} else if (target == "EVENTS") && (mode == gnmipb.SubscriptionList_STREAM) {
 		dc, err = sdc.NewEventClient(paths, prefix, c.logLevel)
 		authTarget = "gnmi_events"
@@ -320,7 +319,7 @@ func (c *Client) send(stream gnmipb.GNMI_SubscribeServer, dc sdc.Client) error {
 				c.errors++
 				return err
 			}
-			val = &v;
+			val = &v
 		default:
 			log.V(1).Infof("Unknown data type %v for %s in queue", items[0], c)
 			c.errors++

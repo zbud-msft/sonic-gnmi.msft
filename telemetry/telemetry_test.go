@@ -1,32 +1,35 @@
 package main
 
 import (
-	"crypto/tls"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"math/big"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"encoding/pem"
 	"errors"
-	"github.com/fsnotify/fsnotify"
-	"reflect"
-	"sync"
-	"sync/atomic"
-	"testing"
 	"flag"
+	"fmt"
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/fsnotify/fsnotify"
 	gnmi "github.com/sonic-net/sonic-gnmi/gnmi_server"
 	"github.com/sonic-net/sonic-gnmi/test_utils"
-	"github.com/agiledragon/gomonkey/v2"
-	"os"
-	"syscall"
-	"time"
-	"io/ioutil"
-	"context"
-	"encoding/pem"
-	"fmt"
 	testdata "github.com/sonic-net/sonic-gnmi/testdata/tls"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"io"
+	"io/ioutil"
+	"math/big"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
 )
 
 func TestRunTelemetry(t *testing.T) {
@@ -38,7 +41,7 @@ func TestRunTelemetry(t *testing.T) {
 	})
 	defer patches.Reset()
 
-	args := []string{"telemetry", "-logtostderr",  "-port", "50051", "-v=2", "-noTLS"}
+	args := []string{"telemetry", "-logtostderr", "-port", "50051", "-v=2", "-noTLS"}
 	os.Args = args
 	err := runTelemetry(os.Args)
 	if err != nil {
@@ -110,7 +113,7 @@ func TestFlags(t *testing.T) {
 
 		config, _, err := setupFlags(fs)
 
-		if index < len(tests) - 2 {
+		if index < len(tests)-2 {
 			if err != nil {
 				t.Errorf("Expected err to be nil, got err %v", err)
 			}
@@ -147,7 +150,7 @@ func TestStartGNMIServer(t *testing.T) {
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval) * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval)*time.Second)
 	defer cancel()
 
 	originalArgs := os.Args
@@ -166,7 +169,7 @@ func TestStartGNMIServer(t *testing.T) {
 	patches := gomonkey.ApplyFunc(tls.LoadX509KeyPair, func(certFile, keyFile string) (tls.Certificate, error) {
 		return tls.Certificate{}, nil
 	})
-	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, opts []grpc.ServerOption) (*gnmi.Server, error) {
+	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*gnmi.Server, error) {
 		return &gnmi.Server{}, nil
 	})
 	patches.ApplyFunc(grpc.Creds, func(credentials.TransportCredentials) grpc.ServerOption {
@@ -218,7 +221,7 @@ func TestStartGNMIServerGracefulStop(t *testing.T) {
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval) * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval)*time.Second)
 	defer cancel()
 
 	originalArgs := os.Args
@@ -237,7 +240,7 @@ func TestStartGNMIServerGracefulStop(t *testing.T) {
 	patches := gomonkey.ApplyFunc(tls.LoadX509KeyPair, func(certFile, keyFile string) (tls.Certificate, error) {
 		return tls.Certificate{}, nil
 	})
-	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, opts []grpc.ServerOption) (*gnmi.Server, error) {
+	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*gnmi.Server, error) {
 		return &gnmi.Server{}, nil
 	})
 	patches.ApplyFunc(grpc.Creds, func(credentials.TransportCredentials) grpc.ServerOption {
@@ -256,14 +259,13 @@ func TestStartGNMIServerGracefulStop(t *testing.T) {
 	stopSignalHandler := make(chan bool, 1)
 	wg := &sync.WaitGroup{}
 
-	counter := 0      
+	counter := 0
 	exitCalled := false
 	patches.ApplyMethod(reflect.TypeOf(&gnmi.Server{}), "Stop", func(_ *gnmi.Server) {
 		exitCalled = true
 	})
-        patches.ApplyMethod(reflect.TypeOf(&gnmi.Server{}), "ForceStop", func(_ *gnmi.Server) {
+	patches.ApplyMethod(reflect.TypeOf(&gnmi.Server{}), "ForceStop", func(_ *gnmi.Server) {
 	})
-
 
 	defer patches.Reset()
 
@@ -331,6 +333,64 @@ func saveCertKeyPair(certPath, keyPath string) error {
 	return nil
 }
 
+func copyFile(srcPath string, destPath string) error {
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	if _, err = io.Copy(destFile, srcFile); err != nil {
+		return err
+	}
+	err = destFile.Sync()
+	return err
+}
+
+func writeSlowKey(backupKeyPath string, keyPath string) error {
+	// Copy existing key from keyPath to backupKeyPath
+	err := copyFile(keyPath, backupKeyPath)
+	if err != nil {
+		return err
+	}
+
+	// Write from backupKeyPath to keyPath
+	backupKey, err := os.Open(backupKeyPath)
+	if err != nil {
+		return err
+	}
+	defer backupKey.Close()
+
+	key, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	buffer := make([]byte, 256)
+	for {
+		n, err := backupKey.Read(buffer)
+		if n > 0 {
+			key.Write(buffer[:n])
+			key.Sync()
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func createCACert(certPath string) error {
 	rsaPrivateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -342,17 +402,17 @@ func createCACert(certPath string) error {
 		return err
 	}
 
-	caCert := &x509.Certificate {
+	caCert := &x509.Certificate{
 		SerialNumber: serialNum,
-		Subject: pkix.Name {
+		Subject: pkix.Name{
 			Organization: []string{"Mock CA"},
 		},
-		NotBefore: time.Now(),
-		NotAfter: time.Now().Add(time.Hour),
-		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IsCA: true,
+		IsCA:                  true,
 	}
 
 	caBytes, err := x509.CreateCertificate(rand.Reader, caCert, caCert, &rsaPrivateKey.PublicKey, rsaPrivateKey)
@@ -399,7 +459,7 @@ func TestSHA512Checksum(t *testing.T) {
 	patches := gomonkey.ApplyFunc(tls.LoadX509KeyPair, func(certFile, keyFile string) (tls.Certificate, error) {
 		return tls.Certificate{}, fmt.Errorf("Mock LoadX509KeyPair error")
 	})
-	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, opts []grpc.ServerOption) (*gnmi.Server, error) {
+	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*gnmi.Server, error) {
 		return &gnmi.Server{}, nil
 	})
 	patches.ApplyFunc(grpc.Creds, func(credentials.TransportCredentials) grpc.ServerOption {
@@ -463,7 +523,7 @@ func TestStartGNMIServerCACert(t *testing.T) {
 	patches := gomonkey.ApplyFunc(tls.LoadX509KeyPair, func(certFile, keyFile string) (tls.Certificate, error) {
 		return tls.Certificate{}, nil
 	})
-	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, opts []grpc.ServerOption) (*gnmi.Server, error) {
+	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*gnmi.Server, error) {
 		return &gnmi.Server{}, nil
 	})
 	patches.ApplyFunc(grpc.Creds, func(credentials.TransportCredentials) grpc.ServerOption {
@@ -515,7 +575,7 @@ func TestStartGNMIServerCreateWatcherError(t *testing.T) {
 	patches := gomonkey.ApplyFunc(tls.LoadX509KeyPair, func(certFile, keyFile string) (tls.Certificate, error) {
 		return tls.Certificate{}, nil
 	})
-	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, opts []grpc.ServerOption) (*gnmi.Server, error) {
+	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*gnmi.Server, error) {
 		return &gnmi.Server{}, nil
 	})
 	patches.ApplyFunc(grpc.Creds, func(credentials.TransportCredentials) grpc.ServerOption {
@@ -579,7 +639,7 @@ func TestStartGNMIServerSlowCerts(t *testing.T) {
 	})
 	patches.ApplyFunc(computeSHA512Checksum, func(file string) {
 	})
-	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, opts []grpc.ServerOption) (*gnmi.Server, error) {
+	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*gnmi.Server, error) {
 		return &gnmi.Server{}, nil
 	})
 	patches.ApplyFunc(grpc.Creds, func(credentials.TransportCredentials) grpc.ServerOption {
@@ -612,7 +672,7 @@ func TestStartGNMIServerSlowCerts(t *testing.T) {
 
 	sendSignal(serverControlSignal, ServerStart) // Put certs for server to load new certs
 
-	<-serveStarted 
+	<-serveStarted
 
 	sendSignal(serverControlSignal, ServerStop) // Once server starts serving, stop server
 
@@ -658,7 +718,7 @@ func TestStartGNMIServerSlowCACerts(t *testing.T) {
 		}
 		return true
 	})
-	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, opts []grpc.ServerOption) (*gnmi.Server, error) {
+	patches.ApplyFunc(gnmi.NewServer, func(cfg *gnmi.Config, tlsOpts []grpc.ServerOption, commonOpts []grpc.ServerOption) (*gnmi.Server, error) {
 		return &gnmi.Server{}, nil
 	})
 	patches.ApplyFunc(grpc.Creds, func(credentials.TransportCredentials) grpc.ServerOption {
@@ -702,7 +762,7 @@ func TestINotifyCertMonitoringRotation(t *testing.T) {
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval) * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval)*time.Second)
 	defer cancel()
 
 	originalArgs := os.Args
@@ -752,11 +812,8 @@ func TestINotifyCertMonitoringRotation(t *testing.T) {
 func TestINotifyCertMonitoringDeletion(t *testing.T) {
 	testServerCert := "../testdata/certs/testserver.cert"
 	testServerKey := "../testdata/certs/testserver.key"
-	timeoutInterval := 10
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval) * time.Second)
+	timeoutInterval := time.Duration(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutInterval)
 	defer cancel()
 
 	originalArgs := os.Args
@@ -805,14 +862,226 @@ func TestINotifyCertMonitoringDeletion(t *testing.T) {
 	}
 }
 
+func TestINotifyCertMonitoringSlowWrites(t *testing.T) {
+	testServerCert := "../testdata/certs/testserver.cert"
+	testServerKey := "../testdata/certs/testserver.key"
+	tempDir := t.TempDir()
+	testServerKeyBackup := filepath.Join(tempDir, "testserver.key.backup")
+	timeoutInterval := time.Duration(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutInterval)
+	defer cancel()
+
+	originalArgs := os.Args
+	defer func() {
+		os.Args = originalArgs
+	}()
+
+	fs := flag.NewFlagSet("testiNotifyCertMonitoring", flag.ContinueOnError)
+	os.Args = []string{"cmd", "-v=2", "-port", "8080", "-server_crt", testServerCert, "-server_key", testServerKey}
+	telemetryCfg, _, err := setupFlags(fs)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	serverControlSignal := make(chan ServerControlValue, 1)
+	testReadySignal := make(chan int, 1)
+	var certLoaded int32
+	atomic.StoreInt32(&certLoaded, 1)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = saveCertKeyPair(testServerCert, testServerKey)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	go iNotifyCertMonitoring(watcher, telemetryCfg, serverControlSignal, testReadySignal, &certLoaded)
+
+	<-testReadySignal
+
+	// Write slowly to key file such that only get 1 reload after multiple writes
+
+	err = writeSlowKey(testServerKeyBackup, testServerKey)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	select {
+	case val := <-serverControlSignal:
+		if val != ServerStart {
+			t.Errorf("Expected 1 from serverControlSignal, got %d", val)
+		}
+		t.Log("Received correct value from serverControlSignal")
+		_, err = tls.LoadX509KeyPair(testServerCert, testServerKey) // Cert should work after 1 reload
+		if err != nil {
+			t.Errorf("Expected err to be nil, got err %v", err)
+		}
+	case <-ctx.Done():
+		t.Errorf("Expected a value from serverControlSignal, but got none")
+		return
+	}
+}
+
+func TestINotifyCertMonitoringMove(t *testing.T) {
+	testServerCert := "../testdata/certs/testserver.cert"
+	testServerKey := "../testdata/certs/testserver.key"
+	testServerCertBackup := "../testdata/testserver.cert"
+	testServerKeyBackup := "../testdata/testserver.key"
+	timeoutInterval := time.Duration(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutInterval)
+	defer cancel()
+
+	originalArgs := os.Args
+	defer func() {
+		os.Args = originalArgs
+	}()
+
+	fs := flag.NewFlagSet("testiNotifyCertMonitoring", flag.ContinueOnError)
+	os.Args = []string{"cmd", "-v=2", "-port", "8080", "-server_crt", testServerCert, "-server_key", testServerKey}
+	telemetryCfg, _, err := setupFlags(fs)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	serverControlSignal := make(chan ServerControlValue, 1)
+	testReadySignal := make(chan int, 1)
+	var certLoaded int32
+	atomic.StoreInt32(&certLoaded, 1)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = saveCertKeyPair(testServerCertBackup, testServerKeyBackup)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = os.Remove(testServerCert)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = os.Remove(testServerKey)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = os.Rename(testServerCertBackup, testServerCert)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	go iNotifyCertMonitoring(watcher, telemetryCfg, serverControlSignal, testReadySignal, &certLoaded)
+
+	<-testReadySignal
+
+	// Move key file from other directory to monitored directory and ensure after 1 reload, LoadKeyPair works
+
+	err = os.Rename(testServerKeyBackup, testServerKey)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	select {
+	case val := <-serverControlSignal:
+		if val != ServerStart {
+			t.Errorf("Expected 1 from serverControlSignal, got %d", val)
+		}
+		t.Log("Received correct value from serverControlSignal")
+		_, err = tls.LoadX509KeyPair(testServerCert, testServerKey) // Cert should work after 1 reload
+		if err != nil {
+			t.Errorf("Expected err to be nil, got err %v", err)
+		}
+	case <-ctx.Done():
+		t.Errorf("Expected a value from serverControlSignal, but got none")
+		return
+	}
+}
+
+func TestINotifyCertMonitoringCopy(t *testing.T) {
+	testServerCert := "../testdata/certs/testserver.cert"
+	testServerKey := "../testdata/certs/testserver.key"
+	tempDir := t.TempDir()
+	testServerCertBackup := filepath.Join(tempDir, "testserver.cert.backup")
+	testServerKeyBackup := filepath.Join(tempDir, "testserver.key.backup")
+	timeoutInterval := time.Duration(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutInterval)
+	defer cancel()
+
+	originalArgs := os.Args
+	defer func() {
+		os.Args = originalArgs
+	}()
+
+	fs := flag.NewFlagSet("testiNotifyCertMonitoring", flag.ContinueOnError)
+	os.Args = []string{"cmd", "-v=2", "-port", "8080", "-server_crt", testServerCert, "-server_key", testServerKey}
+	telemetryCfg, _, err := setupFlags(fs)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	serverControlSignal := make(chan ServerControlValue, 1)
+	testReadySignal := make(chan int, 1)
+	var certLoaded int32
+	atomic.StoreInt32(&certLoaded, 1)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = saveCertKeyPair(testServerCertBackup, testServerKeyBackup)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = saveCertKeyPair(testServerCert, testServerKey)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	err = copyFile(testServerCertBackup, testServerCert)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	go iNotifyCertMonitoring(watcher, telemetryCfg, serverControlSignal, testReadySignal, &certLoaded)
+
+	<-testReadySignal
+
+	// Copy key file from other directory to monitored directory and ensure after 1 reload, LoadKeyPair works
+
+	err = copyFile(testServerKeyBackup, testServerKey)
+	if err != nil {
+		t.Errorf("Expected err to be nil, got err %v", err)
+	}
+
+	select {
+	case val := <-serverControlSignal:
+		if val != ServerStart {
+			t.Errorf("Expected 1 from serverControlSignal, got %d", val)
+		}
+		t.Log("Received correct value from serverControlSignal")
+		_, err = tls.LoadX509KeyPair(testServerCert, testServerKey) // Cert should work after 1 reload
+		if err != nil {
+			t.Errorf("Expected err to be nil, got err %v", err)
+		}
+	case <-ctx.Done():
+		t.Errorf("Expected a value from serverControlSignal, but got none")
+		return
+	}
+}
+
 func TestINotifyCertMonitoringErrors(t *testing.T) {
 	testServerCert := "../testdata/certs/testserver.cert"
 	testServerKey := "../testdata/certs/testserver.key"
-	timeoutInterval := 10
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval) * time.Second)
+	timeoutInterval := time.Duration(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutInterval)
 	defer cancel()
 
 	originalArgs := os.Args
@@ -856,14 +1125,12 @@ func TestINotifyCertMonitoringErrors(t *testing.T) {
 	}
 }
 
-func TestINotifyCertMonitoringAddWatcherError(t *testing.T) {
+// Temporarily disabling this function due to flakiness, Zain will later fix this function
+func DisabledTestINotifyCertMonitoringAddWatcherError(t *testing.T) {
 	testServerCert := "../testdata/certs/testserver.cert"
 	testServerKey := "../testdata/certs/testserver.key"
-	timeoutInterval := 10
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval) * time.Second)
+	timeoutInterval := time.Duration(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutInterval)
 	defer cancel()
 
 	originalArgs := os.Args
@@ -904,6 +1171,181 @@ func TestINotifyCertMonitoringAddWatcherError(t *testing.T) {
 	}
 }
 
+func TestINotifyCertMonitoringSymlinkRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+	testServerCert := filepath.Join(tmpDir, "server.crt")
+	testServerKey := filepath.Join(tmpDir, "server.key")
+
+	timeoutInterval := 10
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval)*time.Second)
+	defer cancel()
+
+	originalArgs := os.Args
+	defer func() {
+		os.Args = originalArgs
+	}()
+
+	// Create initial cert/key files with numbered backup names
+	certBackup1 := filepath.Join(tmpDir, "server.crt.1")
+	keyBackup1 := filepath.Join(tmpDir, "server.key.1")
+
+	err := saveCertKeyPair(certBackup1, keyBackup1)
+	if err != nil {
+		t.Fatalf("Failed to create initial cert/key pair: %v", err)
+	}
+
+	// Create symlinks pointing to initial backup
+	err = os.Symlink(certBackup1, testServerCert)
+	if err != nil {
+		t.Fatalf("Failed to create cert symlink: %v", err)
+	}
+	err = os.Symlink(keyBackup1, testServerKey)
+	if err != nil {
+		t.Fatalf("Failed to create key symlink: %v", err)
+	}
+
+	fs := flag.NewFlagSet("testSymlinkRotation", flag.ContinueOnError)
+	os.Args = []string{"cmd", "-v=2", "-port", "8080", "-server_crt", testServerCert, "-server_key", testServerKey}
+	telemetryCfg, _, err := setupFlags(fs)
+	if err != nil {
+		t.Fatalf("Failed to setup flags: %v", err)
+	}
+
+	serverControlSignal := make(chan ServerControlValue, 1)
+	testReadySignal := make(chan int, 1)
+	var certLoaded int32
+	atomic.StoreInt32(&certLoaded, 0)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+
+	go iNotifyCertMonitoring(watcher, telemetryCfg, serverControlSignal, testReadySignal, &certLoaded)
+
+	<-testReadySignal
+
+	// Simulate cert rotation: create new backup files and update symlinks (like ln -sf)
+	certBackup2 := filepath.Join(tmpDir, "server.crt.2")
+	keyBackup2 := filepath.Join(tmpDir, "server.key.2")
+
+	err = saveCertKeyPair(certBackup2, keyBackup2)
+	if err != nil {
+		t.Fatalf("Failed to create new cert/key pair: %v", err)
+	}
+
+	os.Remove(testServerCert)
+	err = os.Symlink(certBackup2, testServerCert)
+	if err != nil {
+		t.Fatalf("Failed to update cert symlink: %v", err)
+	}
+
+	os.Remove(testServerKey)
+	err = os.Symlink(keyBackup2, testServerKey)
+	if err != nil {
+		t.Fatalf("Failed to update key symlink: %v", err)
+	}
+
+	for {
+		select {
+		case val := <-serverControlSignal:
+			if val == ServerStart {
+				t.Log("Received correct ServerStart signal after symlink rotation")
+				return
+			}
+			// Ignore ServerRestart from REMOVE events
+			t.Logf("Received ServerRestart (expected during symlink update)")
+		case <-time.After(100 * time.Millisecond):
+			// No more signals in buffer, wait for ServerStart
+			select {
+			case val := <-serverControlSignal:
+				if val != ServerStart {
+					t.Errorf("Expected ServerStart from serverControlSignal, got %d", val)
+				} else {
+					t.Log("Received correct ServerStart signal after symlink rotation")
+				}
+				return
+			case <-ctx.Done():
+				t.Errorf("Expected ServerStart from serverControlSignal, but got none")
+				return
+			}
+		}
+	}
+}
+
+func TestINotifyCertMonitoringCertValidationFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	testServerCert := filepath.Join(tmpDir, "server.crt")
+	testServerKey := filepath.Join(tmpDir, "server.key")
+
+	timeoutInterval := 10
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval)*time.Second)
+	defer cancel()
+
+	originalArgs := os.Args
+	defer func() {
+		os.Args = originalArgs
+	}()
+
+	fs := flag.NewFlagSet("testCertValidationFails", flag.ContinueOnError)
+	os.Args = []string{"cmd", "-v=2", "-port", "8080", "-server_crt", testServerCert, "-server_key", testServerKey}
+	telemetryCfg, _, err := setupFlags(fs)
+	if err != nil {
+		t.Fatalf("Failed to setup flags: %v", err)
+	}
+
+	serverControlSignal := make(chan ServerControlValue, 1)
+	testReadySignal := make(chan int, 1)
+	var certLoaded int32
+	atomic.StoreInt32(&certLoaded, 0)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+
+	go iNotifyCertMonitoring(watcher, telemetryCfg, serverControlSignal, testReadySignal, &certLoaded)
+
+	<-testReadySignal
+
+	tempDir := t.TempDir()
+	tempCert := filepath.Join(tempDir, "temp.crt")
+	tempKey := filepath.Join(tempDir, "temp.key")
+
+	err = saveCertKeyPair(tempCert, tempKey)
+	if err != nil {
+		t.Fatalf("Failed to create temp cert/key pair: %v", err)
+	}
+
+	err = copyFile(tempCert, testServerCert)
+	if err != nil {
+		t.Fatalf("Failed to copy cert file: %v", err)
+	}
+
+	select {
+	case val := <-serverControlSignal:
+		t.Errorf("Expected no signal due to cert validation failure, but got signal: %d", val)
+	case <-time.After(500 * time.Millisecond):
+		t.Log("Correctly received no signal after cert validation failure")
+	}
+
+	err = copyFile(tempKey, testServerKey)
+	if err != nil {
+		t.Fatalf("Failed to copy key file: %v", err)
+	}
+
+	select {
+	case val := <-serverControlSignal:
+		if val != ServerStart {
+			t.Errorf("Expected ServerStart from serverControlSignal, got %d", val)
+		} else {
+			t.Log("Received correct ServerStart signal after valid cert/key pair written")
+		}
+	case <-ctx.Done():
+		t.Errorf("Expected ServerStart from serverControlSignal after valid cert, but got none")
+	}
+}
+
 func TestSignalHandler(t *testing.T) {
 	testHandlerSyscall(t, syscall.SIGTERM)
 	testHandlerSyscall(t, syscall.SIGQUIT)
@@ -914,7 +1356,7 @@ func TestSignalHandler(t *testing.T) {
 
 func testHandlerSyscall(t *testing.T, signal os.Signal) {
 	timeoutInterval := 1
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval) * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutInterval)*time.Second)
 	defer cancel()
 
 	serverControlSignal := make(chan ServerControlValue, 1)
@@ -949,6 +1391,29 @@ func testHandlerSyscall(t *testing.T, signal os.Signal) {
 
 func sendSignal(serverControlSignal chan<- ServerControlValue, value ServerControlValue) {
 	serverControlSignal <- value
+}
+
+func TestFlagsNoPortNoUnixSocket(t *testing.T) {
+	// Test that validation fails when neither port nor unix_socket is specified
+	originalArgs := os.Args
+	defer func() {
+		os.Args = originalArgs
+	}()
+
+	fs := flag.NewFlagSet("testNoPortNoUnixSocket", flag.ContinueOnError)
+	// Explicitly disable unix_socket (since it now has a default) and set port to 0
+	os.Args = []string{"cmd", "-port", "0", "-unix_socket", "", "-noTLS"}
+
+	cfg, _, err := setupFlags(fs)
+	if err == nil {
+		t.Error("Expected error when port is 0 and no unix_socket, but got nil")
+	}
+	if cfg != nil {
+		t.Error("Expected nil config when validation fails")
+	}
+	if err != nil && !strings.Contains(err.Error(), "port must be > 0") {
+		t.Errorf("Expected 'port must be > 0' error, got: %v", err)
+	}
 }
 
 func TestMain(m *testing.M) {

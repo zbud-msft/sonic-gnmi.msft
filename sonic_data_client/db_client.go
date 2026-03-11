@@ -3,6 +3,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/golang/glog"
-
-	"github.com/Workiva/go-datastructures/queue"
-	"github.com/go-redis/redis"
-	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	spb "github.com/sonic-net/sonic-gnmi/proto"
 	sdcfg "github.com/sonic-net/sonic-gnmi/sonic_db_config"
+
+	"github.com/Workiva/go-datastructures/queue"
+	log "github.com/golang/glog"
+	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -484,6 +485,13 @@ func ValToResp(val Value) (*gnmipb.SubscribeResponse, error) {
 	}
 }
 
+// countersDbHasTableKeys returns true if the given COUNTERS_DB table stores
+// data under per-object keys (e.g. COUNTERS, PORT_PHY_ATTR).  Tables that are
+// stored as a single hash without sub-keys return false.
+func countersDbHasTableKeys(tableName string) bool {
+	return tableName == "COUNTERS" || tableName == "PORT_PHY_ATTR"
+}
+
 func GetTableKeySeparator(target string, ns string) (string, error) {
 	_, ok := spb.Target_value[target]
 	if !ok {
@@ -507,11 +515,15 @@ func GetRedisClientsForDb(target string) (redis_client_map map[string]*redis.Cli
 			return redis_client_map, err
 		}
 		for _, ns := range ns_list {
-			redis_client_map[ns] = Target2RedisDb[ns][target]
+			if client := Target2RedisDb[ns][target]; client != nil {
+				redis_client_map[ns] = client
+			}
 		}
 	} else {
 		ns, _ := sdcfg.GetDbDefaultNamespace()
-		redis_client_map[ns] = Target2RedisDb[ns][target]
+		if client := Target2RedisDb[ns][target]; client != nil {
+			redis_client_map[ns] = client
+		}
 	}
 	return redis_client_map, nil
 }
@@ -559,7 +571,8 @@ func useRedisTcpClient() error {
 			if dbName != "OTHERS" {
 				addr, err := sdcfg.GetDbTcpAddr(dbName, dbNamespace)
 				if err != nil {
-					return err
+					log.Warningf("Skipping %s in namespace %s: %v", dbName, dbNamespace, err)
+					continue
 				}
 				// DB connector for direct redis operation
 				redisDb := redis.NewClient(&redis.Options{
@@ -578,6 +591,10 @@ func useRedisTcpClient() error {
 
 // Client package prepare redis clients to all DBs automatically
 func init() {
+	initRedisDbClients()
+}
+
+func initRedisDbClients() {
 	AllNamespaces, err := sdcfg.GetDbAllNamespaces()
 	if err != nil {
 		log.Errorf("init error:  %v", err)
@@ -589,8 +606,8 @@ func init() {
 			if dbName != "OTHERS" {
 				addr, err := sdcfg.GetDbSock(dbName, dbNamespace)
 				if err != nil {
-					log.Errorf("init error:  %v", err)
-					return
+					log.Warningf("Skipping %s in namespace %s: %v", dbName, dbNamespace, err)
+					continue
 				}
 				// DB connector for direct redis operation
 				redisDb := redis.NewClient(&redis.Options{
@@ -676,6 +693,10 @@ func populateDbtablePath(prefix, path *gnmipb.Path, pathG2S *map[*gnmipb.Path][]
 		if err != nil {
 			log.Errorf("Could not create CountersFabricPortNameMap: %v", err)
 		}
+		err = initDebugNameSwitchStatMap()
+		if err != nil {
+			log.Errorf("Could not create CountersDebugNameSwitchStatMap: %v", err)
+		}
 		err = initCountersSidMap()
 		if err != nil {
 			log.Errorf("Could not create CountersSidMap: %v", err)
@@ -683,13 +704,6 @@ func populateDbtablePath(prefix, path *gnmipb.Path, pathG2S *map[*gnmipb.Path][]
 		err = initCountersAclRuleMap()
 		if err != nil {
 			log.Errorf("Could not create CountersAclRuleMap: %v", err)
-		}
-	}
-
-	if targetDbName == "CONFIG_DB" {
-		err = initAliasMap()
-		if err != nil {
-			return err
 		}
 	}
 
@@ -753,7 +767,7 @@ func populateDbtablePath(prefix, path *gnmipb.Path, pathG2S *map[*gnmipb.Path][]
 	case 2: // only table name provided
 		wildcardTableName := tblPath.tableName + "*"
 		log.V(6).Infof("Fetching all keys for %v with table name %s", target, wildcardTableName)
-		res, err := redisDb.Keys(wildcardTableName).Result()
+		res, err := redisDb.Keys(context.Background(), wildcardTableName).Result()
 		if err != nil {
 			return fmt.Errorf("redis Keys op failed for %v %v, got err %v %v", target, dbPath, err, res)
 		}
@@ -761,14 +775,14 @@ func populateDbtablePath(prefix, path *gnmipb.Path, pathG2S *map[*gnmipb.Path][]
 		tblPath.tableKey = ""
 	case 3: // Third element could be table key; or field name in which case table name itself is the key too
 		if targetDbName == "APPL_DB" {
-			keyExists, err := redisDb.Exists(tblPath.tableName + tblPath.delimitor + mappedKey).Result()
+			keyExists, err := redisDb.Exists(context.Background(), tblPath.tableName+tblPath.delimitor+mappedKey).Result()
 			if err != nil {
 				return fmt.Errorf("redis Exists op failed for %v", dbPath)
 			}
 			if keyExists == 1 { // Existing Table:Key
 				tblPath.tableKey = mappedKey
 			} else {
-				fieldExists, err := redisDb.HExists(tblPath.tableName, mappedKey).Result()
+				fieldExists, err := redisDb.HExists(context.Background(), tblPath.tableName, mappedKey).Result()
 				if err != nil {
 					return fmt.Errorf("redis HExists op failed for %v", dbPath)
 				}
@@ -779,7 +793,7 @@ func populateDbtablePath(prefix, path *gnmipb.Path, pathG2S *map[*gnmipb.Path][]
 				}
 			}
 		} else {
-			n, err := redisDb.Exists(tblPath.tableName + tblPath.delimitor + mappedKey).Result()
+			n, err := redisDb.Exists(context.Background(), tblPath.tableName+tblPath.delimitor+mappedKey).Result()
 			if err != nil {
 				return fmt.Errorf("redis Exists op failed for %v", dbPath)
 			}
@@ -793,7 +807,7 @@ func populateDbtablePath(prefix, path *gnmipb.Path, pathG2S *map[*gnmipb.Path][]
 		tblPath.tableKey = mappedKey + tblPath.delimitor + stringSlice[3]
 		// verify whether this key exists
 		key := tblPath.tableName + tblPath.delimitor + tblPath.tableKey
-		n, err := redisDb.Exists(key).Result()
+		n, err := redisDb.Exists(context.Background(), key).Result()
 		if err != nil {
 			return fmt.Errorf("redis Exists op failed for %v", dbPath)
 		}
@@ -813,7 +827,7 @@ func populateDbtablePath(prefix, path *gnmipb.Path, pathG2S *map[*gnmipb.Path][]
 		var key string
 		if tblPath.tableKey != "" {
 			key = tblPath.tableName + tblPath.delimitor + tblPath.tableKey
-			n, _ := redisDb.Exists(key).Result()
+			n, _ := redisDb.Exists(context.Background(), key).Result()
 			if n != 1 {
 				log.V(2).Infof("No valid entry found on %v with key %v", dbPath, key)
 				return fmt.Errorf("No valid entry found on %v with key %v", dbPath, key)
@@ -885,13 +899,13 @@ func TableData2Msi(tblPath *tablePath, useKey bool, op *string, msi *map[string]
 
 	//Only table name provided
 	if tblPath.tableKey == "" {
-		// tables in COUNTERS_DB other than COUNTERS table doesn't have keys
-		if tblPath.dbName == "COUNTERS_DB" && tblPath.tableName != "COUNTERS" {
+		// tables in COUNTERS_DB other than COUNTERS/PORT_PHY_ATTR don't have keys
+		if tblPath.dbName == "COUNTERS_DB" && !countersDbHasTableKeys(tblPath.tableName) {
 			pattern = tblPath.tableName
 		} else {
 			pattern = tblPath.tableName + tblPath.delimitor + "*"
 		}
-		dbkeys, err = redisDb.Keys(pattern).Result()
+		dbkeys, err = redisDb.Keys(context.Background(), pattern).Result()
 		if err != nil {
 			log.V(2).Infof("redis Keys failed for %v, pattern %s", tblPath, pattern)
 			return fmt.Errorf("redis Keys failed for %v, pattern %s %v", tblPath, pattern, err)
@@ -905,7 +919,7 @@ func TableData2Msi(tblPath *tablePath, useKey bool, op *string, msi *map[string]
 
 	// Asked to use jsonField and jsonTableKey in the final json value
 	if tblPath.jsonField != "" && tblPath.jsonTableKey != "" {
-		val, err := redisDb.HGet(dbkeys[0], tblPath.field).Result()
+		val, err := redisDb.HGet(context.Background(), dbkeys[0], tblPath.field).Result()
 		log.V(4).Infof("Data pulled for key %s and field %s: %s", dbkeys[0], tblPath.field, val)
 		if err != nil {
 			log.V(3).Infof("redis HGet failed for %v %v", tblPath, err)
@@ -919,7 +933,7 @@ func TableData2Msi(tblPath *tablePath, useKey bool, op *string, msi *map[string]
 	}
 
 	for idx, dbkey := range dbkeys {
-		fv, err = redisDb.HGetAll(dbkey).Result()
+		fv, err = redisDb.HGetAll(context.Background(), dbkey).Result()
 		if err != nil {
 			log.V(2).Infof("redis HGetAll failed for  %v, dbkey %s", tblPath, dbkey)
 			return err
@@ -960,7 +974,7 @@ func AppDBTableData2Msi(tblPath *tablePath, useKey bool, op *string, msi *map[st
 	if tblPath.tableKey == "" {
 		// tables in COUNTERS_DB other than COUNTERS table doesn't have keys
 		pattern = tblPath.tableName + tblPath.delimitor + "*"
-		dbkeys, err = redisDb.Keys(pattern).Result()
+		dbkeys, err = redisDb.Keys(context.Background(), pattern).Result()
 		if err != nil {
 			log.V(2).Infof("redis Keys failed for %v, pattern %s", tblPath, pattern)
 			return fmt.Errorf("redis Keys failed for %v, pattern %s %v", tblPath, pattern, err)
@@ -973,7 +987,7 @@ func AppDBTableData2Msi(tblPath *tablePath, useKey bool, op *string, msi *map[st
 	log.V(4).Infof("dbkeys to be pulled from redis %v", dbkeys)
 
 	for idx, dbkey := range dbkeys {
-		fv, err = redisDb.HGetAll(dbkey).Result()
+		fv, err = redisDb.HGetAll(context.Background(), dbkey).Result()
 		if err != nil {
 			log.V(2).Infof("redis HGetAll failed for  %v, dbkey %s", tblPath, dbkey)
 			return err
@@ -1041,7 +1055,7 @@ func tableData2TypedValue(tblPaths []tablePath, op *string) (*gnmipb.TypedValue,
 					key = tblPath.tableName
 				}
 
-				val, err := redisDb.HGet(key, tblPath.field).Result()
+				val, err := redisDb.HGet(context.Background(), key, tblPath.field).Result()
 				if err != nil {
 					log.V(2).Infof("redis HGet failed for %v", tblPath)
 					return nil, err
@@ -1083,7 +1097,7 @@ func AppDBTableData2TypedValue(tblPaths []tablePath, op *string) (*gnmipb.TypedV
 					key = tblPath.tableName
 				}
 
-				val, err := redisDb.HGet(key, tblPath.field).Result()
+				val, err := redisDb.HGet(context.Background(), key, tblPath.field).Result()
 				if err != nil {
 					log.V(2).Infof("redis HGet failed for %v, data does not exist", tblPath)
 					continue
@@ -1152,7 +1166,7 @@ func dbFieldMultiSubscribe(c *DbClient, gnmiPath *gnmipb.Path, onChange bool, in
 			}
 			// run redis get directly for field value
 			redisDb := Target2RedisDb[tblPath.dbNamespace][tblPath.dbName]
-			val, err := redisDb.HGet(key, tblPath.field).Result()
+			val, err := redisDb.HGet(context.Background(), key, tblPath.field).Result()
 			if err == redis.Nil {
 				if tblPath.jsonField != "" {
 					// ignore non-existing field which was derived from virtual path
@@ -1249,7 +1263,7 @@ func dbFieldSubscribe(c *DbClient, gnmiPath *gnmipb.Path, onChange bool, interva
 	}
 
 	readVal := func() string {
-		newVal, err := redisDb.HGet(key, tblPath.field).Result()
+		newVal, err := redisDb.HGet(context.Background(), key, tblPath.field).Result()
 		if err == redis.Nil {
 			log.V(2).Infof("%v doesn't exist with key %v in db", tblPath.field, key)
 			newVal = ""
@@ -1330,7 +1344,7 @@ func dbSingleTableKeySubscribe(c *DbClient, rsd redisSubData, updateChannel chan
 	for {
 		select {
 		default:
-			msgi, err := pubsub.ReceiveTimeout(time.Millisecond * 500)
+			msgi, err := pubsub.ReceiveTimeout(context.Background(), time.Millisecond*500)
 			if err != nil {
 				neterr, ok := err.(net.Error)
 				if ok {
@@ -1456,8 +1470,8 @@ func dbTableKeySubscribe(c *DbClient, gnmiPath *gnmipb.Path, interval time.Durat
 		// Subscribe to keyspace notification
 		pattern := "__keyspace@" + strconv.Itoa(int(spb.Target_value[tblPath.dbName])) + "__:"
 		pattern += tblPath.tableName
-		if tblPath.dbName == "COUNTERS_DB" && tblPath.tableName != "COUNTERS" {
-			// tables in COUNTERS_DB other than COUNTERS don't have keys, skip delimitor
+		if tblPath.dbName == "COUNTERS_DB" && !countersDbHasTableKeys(tblPath.tableName) {
+			// tables in COUNTERS_DB without per-object keys, skip delimitor
 		} else {
 			pattern += tblPath.delimitor
 		}
@@ -1471,10 +1485,10 @@ func dbTableKeySubscribe(c *DbClient, gnmiPath *gnmipb.Path, interval time.Durat
 			pattern += "*"
 		}
 		redisDb := Target2RedisDb[tblPath.dbNamespace][tblPath.dbName]
-		pubsub := redisDb.PSubscribe(pattern)
+		pubsub := redisDb.PSubscribe(context.Background(), pattern)
 		defer pubsub.Close()
 
-		msgi, err := pubsub.ReceiveTimeout(time.Second)
+		msgi, err := pubsub.ReceiveTimeout(context.Background(), time.Second)
 		if err != nil {
 			handleFatalMsg(fmt.Sprintf("psubscribe to %s failed for %v", pattern, tblPath))
 			return
@@ -1520,14 +1534,11 @@ func dbTableKeySubscribe(c *DbClient, gnmiPath *gnmipb.Path, interval time.Durat
 	// Listen on updates from tables.
 	// Depending on the interval, send the updates every interval or on change only.
 	intervalTicker := make(<-chan time.Time)
+	if interval > 0 {
+		intervalTicker = GetIntervalTicker()(interval)
+	}
+
 	for {
-
-		// The interval ticker ticks only when the interval is non-zero.
-		// Otherwise (e.g. on-change mode) it would never tick.
-		if interval > 0 {
-			intervalTicker = GetIntervalTicker()(interval)
-		}
-
 		select {
 		case updatedTable := <-updateChannel:
 			log.V(6).Infof("update received: %v", updatedTable)
@@ -1556,6 +1567,9 @@ func dbTableKeySubscribe(c *DbClient, gnmiPath *gnmipb.Path, interval time.Durat
 				msiAll = make(map[string]interface{})
 				log.V(6).Infof("msiAll cleared: %v", len(msiAll))
 			}
+
+			// Recreate the ticker for the next interval
+			intervalTicker = GetIntervalTicker()(interval)
 
 		case <-c.channel:
 			log.V(1).Infof("Stopping dbTableKeySubscribe routine for %v ", c.pathG2S)

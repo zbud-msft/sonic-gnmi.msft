@@ -1,7 +1,8 @@
 package gnmi
 
 import (
-	"io/ioutil"
+	"context"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -26,7 +27,7 @@ const (
 )
 
 func MockNSEnterOutput(t *testing.T, fileName string) *gomonkey.Patches {
-	fileContentBytes, err := ioutil.ReadFile(fileName)
+	fileContentBytes, err := os.ReadFile(fileName)
 	if err != nil {
 		t.Fatalf("read file %v err: %v", fileName, err)
 	}
@@ -48,7 +49,7 @@ func MockExecCmds(t *testing.T, cmdAndFileMap map[string]string) *gomonkey.Patch
 		for mockCmd := range cmdAndFileMap {
 			for _, cmdArg := range args {
 				if strings.Contains(cmdArg, mockCmd) {
-					fileContentBytes, err = ioutil.ReadFile(cmdAndFileMap[mockCmd])
+					fileContentBytes, err = os.ReadFile(cmdAndFileMap[mockCmd])
 					if err != nil {
 						t.Fatalf("read file %v err: %v", cmdAndFileMap[mockCmd], err)
 					}
@@ -76,7 +77,7 @@ func MockReadFile(fileName string, fileContent string, fileReadErr error) {
 			}
 			return []byte(fileContent), nil
 		}
-		return ioutil.ReadFile(filePath)
+		return os.ReadFile(filePath)
 	}
 }
 
@@ -84,7 +85,7 @@ func FlushDataSet(t *testing.T, dbNum int) {
 	ns, _ := sdcfg.GetDbDefaultNamespace()
 	rclient := getRedisClientN(t, dbNum, ns)
 	defer rclient.Close()
-	rclient.FlushDB()
+	rclient.FlushDB(context.Background())
 }
 
 func AddDataSet(t *testing.T, dbNum int, fileName string) {
@@ -93,7 +94,7 @@ func AddDataSet(t *testing.T, dbNum int, fileName string) {
 	rclient := getRedisClientN(t, dbNum, ns)
 	defer rclient.Close()
 
-	fileContentBytes, err := ioutil.ReadFile(fileName)
+	fileContentBytes, err := os.ReadFile(fileName)
 	if err != nil {
 		t.Fatalf("read file: %v, err: %v", fileName, err)
 	}

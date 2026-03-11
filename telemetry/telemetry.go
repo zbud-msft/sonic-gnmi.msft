@@ -19,14 +19,15 @@ import (
 	"time"
 
 	gnmi "github.com/sonic-net/sonic-gnmi/gnmi_server"
+	"github.com/sonic-net/sonic-gnmi/pkg/interceptors"
 	testcert "github.com/sonic-net/sonic-gnmi/testdata/tls"
 
 	"github.com/fsnotify/fsnotify"
 	log "github.com/golang/glog"
+	"github.com/sonic-net/sonic-gnmi/swsscommon"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
-	"github.com/sonic-net/sonic-gnmi/swsscommon"
 )
 
 type ServerControlValue int
@@ -40,6 +41,7 @@ const (
 type TelemetryConfig struct {
 	UserAuth              gnmi.AuthTypes
 	Port                  *int
+	UnixSocket            *string
 	LogLevel              *int
 	CaCert                *string
 	ServerCert            *string
@@ -55,12 +57,21 @@ type TelemetryConfig struct {
 	GnmiTranslibWrite     *bool
 	GnmiNativeWrite       *bool
 	Threshold             *int
+	StreamingThreshold    *int
+	UnaryThreshold        *int
 	WithMasterArbitration *bool
 	WithSaveOnSet         *bool
 	IdleConnDuration      *int
 	Vrf                   *string
 	EnableCrl             *bool
 	CrlExpireDuration     *int
+	CaCertLnk             *string
+	ServerCertLnk         *string
+	ServerKeyLnk          *string
+	CertCRLConfig         *string
+	IntManFile            *string
+	CertzMetaFile         *string
+	ImgDirPath            *string
 }
 
 func main() {
@@ -154,10 +165,8 @@ func setupFlags(fs *flag.FlagSet) (*TelemetryConfig, *gnmi.Config, error) {
 	telemetryCfg := &TelemetryConfig{
 		UserAuth:              gnmi.AuthTypes{"password": false, "cert": false, "jwt": false},
 		Port:                  fs.Int("port", -1, "port to listen on"),
+		UnixSocket:            fs.String("unix_socket", "/var/run/gnmi/gnmi.sock", "Unix socket path for local connections without TLS (set to empty to disable)"),
 		LogLevel:              fs.Int("v", 2, "log level of process"),
-		CaCert:                fs.String("ca_crt", "", "CA certificate for client certificate validation. Optional."),
-		ServerCert:            fs.String("server_crt", "", "TLS server certificate"),
-		ServerKey:             fs.String("server_key", "", "TLS server private key"),
 		ConfigTableName:       fs.String("config_table_name", "", "Config table name"),
 		ZmqAddress:            fs.String("zmq_address", "", "Orchagent ZMQ address, deprecated, please use zmq_port."),
 		ZmqPort:               fs.String("zmq_port", "", "Orchagent ZMQ port, when not set or empty string telemetry server will switch to Redis based communication channel."),
@@ -175,6 +184,16 @@ func setupFlags(fs *flag.FlagSet) (*TelemetryConfig, *gnmi.Config, error) {
 		Vrf:                   fs.String("vrf", "", "VRF name, when zmq_address belong on a VRF, need VRF name to bind ZMQ."),
 		EnableCrl:             fs.Bool("enable_crl", false, "Enable certificate revocation list"),
 		CrlExpireDuration:     fs.Int("crl_expire_duration", 86400, "Certificate revocation list cache expire duration"),
+		ImgDirPath:            fs.String("img_dir", "/tmp/host_tmp", "Directory path where image will be transferred."),
+		CaCert:                fs.String("ca_crt", "", "CA certificate for client certificate validation. Optional."),
+		ServerCert:            fs.String("server_crt", "", "TLS server certificate"),
+		ServerKey:             fs.String("server_key", "", "TLS server private key"),
+		CaCertLnk:             fs.String("ca_cert_lnk", "/keys/ca_cert.lnk", "Path for CA certificate symlink"),
+		ServerCertLnk:         fs.String("server_cert_lnk", "/keys/server_cert.lnk", "Path for Server certificate symlink"),
+		ServerKeyLnk:          fs.String("server_key_lnk", "/keys/server_key.lnk", "Path for Server key symlink"),
+		IntManFile:            fs.String("integrity_manifest_file", "", "Full path name of integrity manifest file."),
+		CertCRLConfig:         fs.String("cert_crl_dir", "/mtls/crl", "Directory for CRL files"),
+		CertzMetaFile:         fs.String("grpc_meta", "/keys/grpc-version.json", "gRPC credentials metadata JSON file"),
 	}
 
 	fs.Var(&telemetryCfg.UserAuth, "client_auth", "Client auth mode(s) - none,cert,password")
@@ -196,8 +215,8 @@ func setupFlags(fs *flag.FlagSet) (*TelemetryConfig, *gnmi.Config, error) {
 	}
 
 	switch {
-	case *telemetryCfg.Port <= 0:
-		return nil, nil, fmt.Errorf("port must be > 0.")
+	case *telemetryCfg.Port <= 0 && *telemetryCfg.UnixSocket == "":
+		return nil, nil, fmt.Errorf("port must be > 0 (or specify --unix_socket).")
 	}
 
 	switch {
@@ -231,6 +250,7 @@ func setupFlags(fs *flag.FlagSet) (*TelemetryConfig, *gnmi.Config, error) {
 
 	cfg := &gnmi.Config{}
 	cfg.Port = int64(*telemetryCfg.Port)
+	cfg.UnixSocket = *telemetryCfg.UnixSocket
 	cfg.EnableTranslibWrite = bool(*telemetryCfg.GnmiTranslibWrite)
 	cfg.EnableNativeWrite = bool(*telemetryCfg.GnmiNativeWrite)
 	cfg.LogLevel = int(*telemetryCfg.LogLevel)
@@ -239,6 +259,15 @@ func setupFlags(fs *flag.FlagSet) (*TelemetryConfig, *gnmi.Config, error) {
 	cfg.ConfigTableName = *telemetryCfg.ConfigTableName
 	cfg.Vrf = *telemetryCfg.Vrf
 	cfg.EnableCrl = *telemetryCfg.EnableCrl
+	cfg.CaCertLnk = *telemetryCfg.CaCertLnk
+	cfg.CaCertFile = *telemetryCfg.CaCert
+	cfg.SrvCertLnk = *telemetryCfg.ServerCertLnk
+	cfg.SrvCertFile = *telemetryCfg.ServerCert
+	cfg.SrvKeyLnk = *telemetryCfg.ServerKeyLnk
+	cfg.SrvKeyFile = *telemetryCfg.ServerKey
+	cfg.CertCRLConfig = *telemetryCfg.CertCRLConfig
+	cfg.IntManFile = *telemetryCfg.IntManFile
+	cfg.CertzMetaFile = *telemetryCfg.CertzMetaFile
 
 	gnmi.SetCrlExpireDuration(time.Duration(*telemetryCfg.CrlExpireDuration) * time.Second)
 
@@ -253,6 +282,28 @@ func setupFlags(fs *flag.FlagSet) (*TelemetryConfig, *gnmi.Config, error) {
 	}
 
 	cfg.ZmqPort = zmqPort
+
+	// Populate the OS-related fields directly on the gnmi.Config struct.
+	cfg.ImgDir = *telemetryCfg.ImgDirPath
+	if cfg.CaCertFile != "" && cfg.CaCertLnk == "/keys/ca_cert.lnk" {
+		cfg.CaCertLnk = filepath.Join(filepath.Dir(cfg.CaCertFile), "ca_cert.lnk")
+	}
+	if cfg.SrvCertFile != "" && cfg.SrvCertLnk == "/keys/server_cert.lnk" {
+		cfg.SrvCertLnk = filepath.Join(filepath.Dir(cfg.SrvCertFile), "server_cert.lnk")
+	}
+	if cfg.SrvKeyFile != "" && cfg.SrvKeyLnk == "/keys/server_key.lnk" {
+		cfg.SrvKeyLnk = filepath.Join(filepath.Dir(cfg.SrvKeyFile), "server_key.lnk")
+	}
+	if cfg.CertzMetaFile == "" {
+		cfg.CertzMetaFile = "/keys/grpc-version.json"
+	}
+	if !*telemetryCfg.Insecure {
+		cfg.GetOptions = gnmi.SrvAdvConfig
+	}
+	if *telemetryCfg.CaCert == "" && telemetryCfg.UserAuth.Enabled("cert") {
+		telemetryCfg.UserAuth.Unset("cert")
+		log.V(2).Info("client_auth mode cert requires ca_crt option. Disabling cert mode authentication.")
+	}
 
 	return telemetryCfg, cfg, nil
 }
@@ -295,13 +346,22 @@ func iNotifyCertMonitoring(watcher *fsnotify.Watcher, telemetryCfg *TelemetryCon
 					filepath.Ext(event.Name) == ".cer" || filepath.Ext(event.Name) == ".pem" ||
 					filepath.Ext(event.Name) == ".key") {
 					log.V(1).Infof("Inotify watcher has received event: %v", event)
-					if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+					if event.Op&(fsnotify.CloseWrite|fsnotify.MovedTo|fsnotify.Create) != 0 {
 						log.V(1).Infof("Cert File has been modified: %s", event.Name)
-						serverControlSignal <- ServerStart // let server know that a write/create event occurred
+
+						// Validate cert/key pair before signaling reload
+						_, err := tls.LoadX509KeyPair(*telemetryCfg.ServerCert, *telemetryCfg.ServerKey)
+						if err != nil {
+							log.V(1).Infof("Cert validation failed: %v", err)
+							continue // Keep monitoring - wait for matching cert/key pair
+						}
+
+						log.V(1).Infof("Cert validation succeeded, signaling server reload")
+						serverControlSignal <- ServerStart
 						done <- true
 						return
 					}
-					if event.Op&fsnotify.Remove == fsnotify.Remove || event.Op&fsnotify.Rename == fsnotify.Rename {
+					if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 						log.V(1).Infof("Cert file has been deleted: %s", event.Name)
 						serverControlSignal <- ServerRestart   // let server know that a remove/rename event occurred
 						if atomic.LoadInt32(certLoaded) == 1 { // Should continue monitoring if certs are not present
@@ -340,8 +400,23 @@ func signalHandler(serverControlSignal chan<- ServerControlValue, sigchannel <-c
 func startGNMIServer(telemetryCfg *TelemetryConfig, cfg *gnmi.Config, serverControlSignal chan ServerControlValue, stopSignalHandler chan<- bool, wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	var currentServerChain *interceptors.ServerChain
+	defer func() {
+		// Cleanup on function exit (ServerStop)
+		if currentServerChain != nil {
+			currentServerChain.Close()
+		}
+	}()
+
 	for {
-		var opts []grpc.ServerOption
+		// Close previous chain before creating new one on restart
+		if currentServerChain != nil {
+			currentServerChain.Close()
+			currentServerChain = nil
+		}
+
+		var tlsOpts []grpc.ServerOption
+		var commonOpts []grpc.ServerOption
 		var certLoaded int32
 		atomic.StoreInt32(&certLoaded, 0) // Not loaded
 
@@ -443,10 +518,10 @@ func startGNMIServer(telemetryCfg *TelemetryConfig, cfg *gnmi.Config, serverCont
 				MaxConnectionIdle: time.Duration(*telemetryCfg.IdleConnDuration) * time.Second, // duration in which idle connection will be closed, default is inf
 			}
 
-			opts = []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+			tlsOpts = []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
 
 			if *telemetryCfg.IdleConnDuration > 0 { // non inf case
-				opts = append(opts, grpc.KeepaliveParams(keep_alive_params))
+				commonOpts = append(commonOpts, grpc.KeepaliveParams(keep_alive_params))
 			}
 
 			cfg.UserAuth = telemetryCfg.UserAuth
@@ -454,7 +529,17 @@ func startGNMIServer(telemetryCfg *TelemetryConfig, cfg *gnmi.Config, serverCont
 			gnmi.GenerateJwtSecretKey()
 		}
 
-		s, err := gnmi.NewServer(cfg, opts)
+		// Setup interceptor chain (includes DPU proxy with Redis-based routing)
+		var err error
+		currentServerChain, err = interceptors.NewServerChain()
+		if err != nil {
+			log.Errorf("Failed to create interceptor chain: %v", err)
+			return
+		}
+
+		commonOpts = append(commonOpts, currentServerChain.GetServerOptions()...)
+
+		s, err := gnmi.NewServer(cfg, tlsOpts, commonOpts)
 		if err != nil {
 			log.Errorf("Failed to create gNMI server: %v", err)
 			return

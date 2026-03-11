@@ -6,11 +6,10 @@ import (
 	"sync/atomic"
 )
 
-
 // AuthInfo holds data about the authenticated user
 type AuthInfo struct {
 	// Username
-	User string
+	User        string
 	AuthEnabled bool
 	// Roles
 	Roles []string
@@ -37,12 +36,19 @@ const requestContextKey contextkey = 0
 var requestCounter uint64
 
 type CounterType int
+
 const (
 	GNMI_GET CounterType = iota
 	GNMI_GET_FAIL
 	GNMI_SET
 	GNMI_SET_FAIL
+	GNMI_SET_BYPASS
 	GNOI_REBOOT
+	GNOI_FACTORY_RESET
+	GNOI_OS_INSTALL
+	GNOI_HEALTHZ_ACK
+	GNOI_HEALTHZ_CHECK
+	GNOI_HEALTHZ_COLLECT
 	DBUS
 	DBUS_FAIL
 	DBUS_APPLY_PATCH_DB
@@ -54,7 +60,14 @@ const (
 	DBUS_STOP_SERVICE
 	DBUS_RESTART_SERVICE
 	DBUS_FILE_STAT
-	DBUS_HALT_SYSTEM
+	DBUS_FILE_DOWNLOAD
+	DBUS_FILE_REMOVE
+	DBUS_IMAGE_DOWNLOAD
+	DBUS_IMAGE_INSTALL
+	DBUS_IMAGE_LIST
+	DBUS_IMAGE_ACTIVATE
+	DBUS_DOCKER_LOAD
+	DBUS_CONFIG_REPLACE
 	COUNTER_SIZE
 )
 
@@ -68,8 +81,20 @@ func (c CounterType) String() string {
 		return "GNMI set"
 	case GNMI_SET_FAIL:
 		return "GNMI set fail"
+	case GNMI_SET_BYPASS:
+		return "GNMI set bypass"
 	case GNOI_REBOOT:
 		return "GNOI reboot"
+	case GNOI_FACTORY_RESET:
+		return "GNOI Factory Reset"
+	case GNOI_OS_INSTALL:
+		return "GNOI OS Install"
+	case GNOI_HEALTHZ_ACK:
+		return "GNOI Healthz Ack"
+	case GNOI_HEALTHZ_CHECK:
+		return "GNOI Healthz Check"
+	case GNOI_HEALTHZ_COLLECT:
+		return "GNOI Healthz Collect"
 	case DBUS:
 		return "DBUS"
 	case DBUS_FAIL:
@@ -92,15 +117,28 @@ func (c CounterType) String() string {
 		return "DBUS restart service"
 	case DBUS_FILE_STAT:
 		return "DBUS file stat"
-	case DBUS_HALT_SYSTEM:
-		return "DBUS halt system"
+	case DBUS_FILE_DOWNLOAD:
+		return "DBUS file download"
+	case DBUS_IMAGE_DOWNLOAD:
+		return "DBUS image download"
+	case DBUS_FILE_REMOVE:
+		return "DBUS file remove"
+	case DBUS_IMAGE_INSTALL:
+		return "DBUS image install"
+	case DBUS_IMAGE_LIST:
+		return "DBUS image list"
+	case DBUS_IMAGE_ACTIVATE:
+		return "DBUS image activate"
+	case DBUS_DOCKER_LOAD:
+		return "DBUS docker load"
+	case DBUS_CONFIG_REPLACE:
+		return "DBUS config replace"
 	default:
 		return ""
 	}
 }
 
 var globalCounters [COUNTER_SIZE]uint64
-
 
 // GetContext function returns the RequestContext object for a
 // gRPC request. RequestContext is maintained as a context value of
@@ -137,4 +175,3 @@ func IncCounter(cnt CounterType) {
 	atomic.AddUint64(&globalCounters[cnt], 1)
 	SetMemCounters(&globalCounters)
 }
-

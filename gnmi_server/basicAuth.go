@@ -1,9 +1,9 @@
 package gnmi
 
 import (
-	"github.com/sonic-net/sonic-gnmi/common_utils"
 	"github.com/golang/glog"
-	"golang.org/x/net/context"
+	"github.com/sonic-net/sonic-gnmi/common_utils"
+	"context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"

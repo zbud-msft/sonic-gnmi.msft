@@ -13,7 +13,7 @@ import (
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/sonic-net/sonic-gnmi/show_client/helpers/ipinterfaces"
 
-	"golang.org/x/net/context"
+	"context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"

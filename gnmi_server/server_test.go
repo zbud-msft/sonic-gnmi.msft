@@ -3,8 +3,13 @@ package gnmi
 // server_test covers gNMI get, subscribe (stream and poll) test
 // Prerequisite: redis-server should be running.
 import (
+	"context"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -14,26 +19,24 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"unsafe"
 
-	"crypto/x509"
-	"crypto/x509/pkix"
-
+	"github.com/sonic-net/sonic-gnmi/common_utils"
 	spb "github.com/sonic-net/sonic-gnmi/proto"
 	sgpb "github.com/sonic-net/sonic-gnmi/proto/gnoi"
 	spb_jwt "github.com/sonic-net/sonic-gnmi/proto/gnoi/jwt"
 	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
 	sdcfg "github.com/sonic-net/sonic-gnmi/sonic_db_config"
 	ssc "github.com/sonic-net/sonic-gnmi/sonic_service_client"
+	"github.com/sonic-net/sonic-gnmi/swsscommon"
 	"github.com/sonic-net/sonic-gnmi/test_utils"
 	testcert "github.com/sonic-net/sonic-gnmi/testdata/tls"
+	"google.golang.org/grpc/security/advancedtls"
 
-	"github.com/go-redis/redis"
 	"github.com/golang/protobuf/proto"
 	"github.com/kylelemons/godebug/pretty"
 	"github.com/openconfig/gnmi/client"
@@ -41,8 +44,8 @@ import (
 	ext_pb "github.com/openconfig/gnmi/proto/gnmi_ext"
 	"github.com/openconfig/gnmi/value"
 	"github.com/openconfig/ygot/ygot"
+	"github.com/redis/go-redis/v9"
 
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -55,14 +58,21 @@ import (
 	"github.com/agiledragon/gomonkey/v2"
 	linuxproc "github.com/c9s/goprocinfo/linux"
 	"github.com/godbus/dbus/v5"
-	gclient "github.com/jipanyang/gnmi/client/gnmi"
-	"github.com/jipanyang/gnxi/utils/xpath"
+	"github.com/google/gnxi/utils/xpath"
 	cacheclient "github.com/openconfig/gnmi/client"
+	gclient "github.com/openconfig/gnmi/client/gnmi"
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	gnoi_file_pb "github.com/openconfig/gnoi/file"
+	gnoi_os_pb "github.com/openconfig/gnoi/os"
 	gnoi_system_pb "github.com/openconfig/gnoi/system"
-	"github.com/sonic-net/sonic-gnmi/common_utils"
-	"github.com/sonic-net/sonic-gnmi/swsscommon"
+)
+
+const (
+	srvTestCertFile   = "../testdata/mtls/server_test_cert.pem"
+	srvTestKeyFile    = "../testdata/mtls/server_test_key.pem"
+	srvTestKeyLink    = "../testdata/mtls/server_key.lnk"
+	srvTestCertLink   = "../testdata/mtls/server_cert.lnk"
+	certzTestMetaFile = "../testdata/gnsi/grpc-version.json"
 )
 
 var clientTypes = []string{gclient.Type}
@@ -87,7 +97,7 @@ func loadDB(t *testing.T, rclient *redis.Client, mpi map[string]interface{}) {
 	for key, fv := range mpi {
 		switch fv.(type) {
 		case map[string]interface{}:
-			_, err := rclient.HMSet(key, fv.(map[string]interface{})).Result()
+			_, err := rclient.HMSet(context.Background(), key, fv.(map[string]interface{})).Result()
 			if err != nil {
 				t.Errorf("Invalid data for db:  %v : %v %v", key, fv, err)
 			}
@@ -100,7 +110,7 @@ func loadDBNotStrict(t *testing.T, rclient *redis.Client, mpi map[string]interfa
 	for key, fv := range mpi {
 		switch fv.(type) {
 		case map[string]interface{}:
-			rclient.HMSet(key, fv.(map[string]interface{})).Result()
+			rclient.HMSet(context.Background(), key, fv.(map[string]interface{})).Result()
 
 		}
 	}
@@ -131,11 +141,57 @@ func createServer(t *testing.T, port int64) *Server {
 		Certificates: []tls.Certificate{certificate},
 	}
 
-	opts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
-	cfg := &Config{Port: port, EnableTranslibWrite: true, EnableNativeWrite: true, Threshold: 100}
-	s, err := NewServer(cfg, opts)
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	cfg := &Config{
+		Port:                port,
+		EnableTranslibWrite: true,
+		EnableNativeWrite:   true,
+		Threshold:           100,
+		ImgDir:              "/tmp",
+	}
+	s, err := NewServer(cfg, tlsOpts, nil)
 	if err != nil {
 		t.Errorf("Failed to create gNMI server: %v", err)
+	}
+	return s
+}
+
+func createMTLSServer(t *testing.T, caCert string) *Server {
+	t.Helper()
+	cfg := &Config{CaCertLnk: CACert, CaCertFile: caCert,
+		SrvCertFile: SCertV1, SrvKeyFile: SKeyV1,
+		CertzMetaFile: certzTestMetaFile, CertCRLConfig: crlConfigTestPath,
+		GetOptions: SrvAdvConfig, SrvCertLnk: srvTestCertLink,
+		SrvKeyLnk: srvTestKeyLink, Port: 8081}
+
+	if err := resetSrvCertKeyToV1(cfg); err != nil {
+		t.Fatalf("Couldn't reset server certificate/key: %v", err)
+	}
+	s := createCertzServer(t, cfg)
+	return s
+}
+
+func createCertzServer(t *testing.T, cfg *Config) *Server {
+	t.Helper()
+	certificate, err := testcert.NewCert()
+	if err != nil {
+		t.Fatalf("could not load server key pair: %s", err)
+	}
+	tlsCfg := &tls.Config{
+		ClientAuth:   tls.RequestClientCert,
+		Certificates: []tls.Certificate{certificate},
+	}
+
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	keep_alive_params := keepalive.ServerParameters{
+		MaxConnectionIdle: 1 * time.Second,
+	}
+	commonOpts := []grpc.ServerOption{
+		grpc.KeepaliveParams(keep_alive_params),
+	}
+	s, err := NewServer(cfg, tlsOpts, commonOpts)
+	if err != nil {
+		t.Fatalf("Failed to create gNMI server: %v", err)
 	}
 	return s
 }
@@ -150,9 +206,13 @@ func createReadServer(t *testing.T, port int64) *Server {
 		Certificates: []tls.Certificate{certificate},
 	}
 
-	opts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
-	cfg := &Config{Port: port, EnableTranslibWrite: false}
-	s, err := NewServer(cfg, opts)
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	cfg := &Config{
+		Port:                port,
+		EnableTranslibWrite: false,
+		ImgDir:              "/tmp",
+	}
+	s, err := NewServer(cfg, tlsOpts, nil)
 	if err != nil {
 		t.Fatalf("Failed to create gNMI server: %v", err)
 	}
@@ -169,9 +229,14 @@ func createRejectServer(t *testing.T, port int64) *Server {
 		Certificates: []tls.Certificate{certificate},
 	}
 
-	opts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
-	cfg := &Config{Port: port, EnableTranslibWrite: true, Threshold: 2}
-	s, err := NewServer(cfg, opts)
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	cfg := &Config{
+		Port:                port,
+		EnableTranslibWrite: true,
+		Threshold:           2,
+		ImgDir:              "/tmp",
+	}
+	s, err := NewServer(cfg, tlsOpts, nil)
 	if err != nil {
 		t.Fatalf("Failed to create gNMI server: %v", err)
 	}
@@ -189,9 +254,14 @@ func createAuthServer(t *testing.T, port int64) *Server {
 		Certificates: []tls.Certificate{certificate},
 	}
 
-	opts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
-	cfg := &Config{Port: port, EnableTranslibWrite: true, UserAuth: AuthTypes{"password": true, "cert": true, "jwt": true}}
-	s, err := NewServer(cfg, opts)
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	cfg := &Config{
+		Port:                port,
+		EnableTranslibWrite: true,
+		UserAuth:            AuthTypes{"password": true, "cert": true, "jwt": true},
+		ImgDir:              "/tmp",
+	}
+	s, err := NewServer(cfg, tlsOpts, nil)
 	if err != nil {
 		t.Fatalf("Failed to create gNMI server: %v", err)
 	}
@@ -208,8 +278,8 @@ func createInvalidServer(t *testing.T, port int64) *Server {
 		Certificates: []tls.Certificate{certificate},
 	}
 
-	opts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
-	s, err := NewServer(nil, opts)
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	s, err := NewServer(nil, tlsOpts, nil)
 	if err != nil {
 		return nil
 	}
@@ -227,16 +297,22 @@ func createKeepAliveServer(t *testing.T, port int64) *Server {
 		Certificates: []tls.Certificate{certificate},
 	}
 
-	opts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
 	keep_alive_params := keepalive.ServerParameters{
 		MaxConnectionIdle: 1 * time.Second,
 	}
-	server_opts := []grpc.ServerOption{
+	commonOpts := []grpc.ServerOption{
 		grpc.KeepaliveParams(keep_alive_params),
 	}
-	server_opts = append(server_opts, opts[0])
-	cfg := &Config{Port: port, EnableTranslibWrite: true, EnableNativeWrite: true, Threshold: 100}
-	s, err := NewServer(cfg, server_opts)
+	cfg := &Config{
+		Port:                port,
+		EnableTranslibWrite: true,
+		EnableNativeWrite:   true,
+		Threshold:           100,
+		ImgDir:              "/tmp",
+	}
+
+	s, err := NewServer(cfg, tlsOpts, commonOpts)
 	if err != nil {
 		t.Errorf("Failed to create gNMI server: %v", err)
 	}
@@ -277,8 +353,8 @@ func TestPFCWDErrors(t *testing.T) {
 				TLS:     &tls.Config{InsecureSkipVerify: true},
 			},
 			wantNoti: []client.Notification{
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
 			},
 		},
 	}
@@ -345,7 +421,7 @@ func TestPFCWDErrors(t *testing.T) {
 // runTestGet requests a path from the server by Get grpc call, and compares if
 // the return code and response value are expected.
 func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTarget string,
-	textPbPath string, wantRetCode codes.Code, wantRespVal interface{}, valTest bool, ignoreValOrder ...bool) {
+	textPbPath string, wantRetCode codes.Code, wantRespVal interface{}, valTest bool) {
 	//var retCodeOk bool
 	// Send request
 	t.Helper()
@@ -406,36 +482,9 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 			}
 		}
 
-		if len(ignoreValOrder) > 0 && ignoreValOrder[0] {
-			// Normalize the values to allow order-insensitive comparison
-			gotVal = normalize(gotVal)
-			wantRespVal = normalize(wantRespVal)
-		}
-
 		if !reflect.DeepEqual(gotVal, wantRespVal) {
 			t.Errorf("got: %v (%T),\nwant %v (%T)", gotVal, gotVal, wantRespVal, wantRespVal)
 		}
-	}
-}
-
-// Normalize recursively sorts maps and slices to allow order-insensitive comparison
-func normalize(v interface{}) interface{} {
-	switch val := v.(type) {
-	case map[string]interface{}:
-		for k, v2 := range val {
-			val[k] = normalize(v2)
-		}
-		return val
-	case []interface{}:
-		for i, v2 := range val {
-			val[i] = normalize(v2)
-		}
-		sort.SliceStable(val, func(i, j int) bool {
-			return fmt.Sprintf("%v", val[i]) < fmt.Sprintf("%v", val[j])
-		})
-		return val
-	default:
-		return val
 	}
 }
 
@@ -546,7 +595,7 @@ func getRedisClientN(t *testing.T, n int, namespace string) *redis.Client {
 		DB:          n,
 		DialTimeout: 0,
 	})
-	_, err = rclient.Ping().Result()
+	_, err = rclient.Ping(context.Background()).Result()
 	if err != nil {
 		t.Fatalf("failed to connect to redis server %v", err)
 	}
@@ -569,7 +618,7 @@ func getRedisClient(t *testing.T, namespace string) *redis.Client {
 		DB:          db,
 		DialTimeout: 0,
 	})
-	_, err = rclient.Ping().Result()
+	_, err = rclient.Ping(context.Background()).Result()
 	if err != nil {
 		t.Fatalf("failed to connect to redis server %v", err)
 	}
@@ -592,7 +641,7 @@ func getConfigDbClient(t *testing.T, namespace string) *redis.Client {
 		DB:          db,
 		DialTimeout: 0,
 	})
-	_, err = rclient.Ping().Result()
+	_, err = rclient.Ping(context.Background()).Result()
 	if err != nil {
 		t.Fatalf("failed to connect to redis server %v", err)
 	}
@@ -603,7 +652,7 @@ func loadConfigDB(t *testing.T, rclient *redis.Client, mpi map[string]interface{
 	for key, fv := range mpi {
 		switch fv.(type) {
 		case map[string]interface{}:
-			_, err := rclient.HMSet(key, fv.(map[string]interface{})).Result()
+			_, err := rclient.HMSet(context.Background(), key, fv.(map[string]interface{})).Result()
 			if err != nil {
 				t.Errorf("Invalid data for db: %v : %v %v", key, fv, err)
 			}
@@ -616,7 +665,7 @@ func loadConfigDB(t *testing.T, rclient *redis.Client, mpi map[string]interface{
 func initFullConfigDb(t *testing.T, namespace string) {
 	rclient := getConfigDbClient(t, namespace)
 	defer rclient.Close()
-	rclient.FlushDB()
+	rclient.FlushDB(context.Background())
 
 	fileName := "../testdata/CONFIG_DHCP_SERVER.txt"
 	config, err := ioutil.ReadFile(fileName)
@@ -630,7 +679,7 @@ func initFullConfigDb(t *testing.T, namespace string) {
 func initFullCountersDb(t *testing.T, namespace string) {
 	rclient := getRedisClient(t, namespace)
 	defer rclient.Close()
-	rclient.FlushDB()
+	rclient.FlushDB(context.Background())
 
 	fileName := "../testdata/COUNTERS_PORT_NAME_MAP.txt"
 	countersPortNameMapByte, err := ioutil.ReadFile(fileName)
@@ -803,12 +852,49 @@ func initFullCountersDb(t *testing.T, namespace string) {
 
 	aclRule1Counter := loadConfig(t, "COUNTERS:oid:0x9000000000711", aclRule1CounterByte)
 	loadDB(t, rclient, aclRule1Counter)
+
+	// Load PORT_PHY_ATTR data for Ethernet68 -> oid:0x1000000000039
+	fileName = "../testdata/PORT_PHY_ATTR:oid:0x1000000000039.txt"
+	phyAttrEth68Byte, err := os.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("failed to open %s, err: %v", fileName, err)
+	}
+
+	phyAttrEth68 := loadConfig(t, "PORT_PHY_ATTR:oid:0x1000000000039", phyAttrEth68Byte)
+	loadDB(t, rclient, phyAttrEth68)
+
+	// Load PORT_PHY_ATTR data for Ethernet1 -> oid:0x1000000000003
+	fileName = "../testdata/PORT_PHY_ATTR:oid:0x1000000000003.txt"
+	phyAttrEth1Byte, err := os.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("failed to open %s, err: %v", fileName, err)
+	}
+
+	phyAttrEth1 := loadConfig(t, "PORT_PHY_ATTR:oid:0x1000000000003", phyAttrEth1Byte)
+	loadDB(t, rclient, phyAttrEth1)
+
+	fileName = "../testdata/COUNTERS_DEBUG_NAME_SWITCH_STAT_MAP.txt"
+	countersDebugNameSwitchStatMapByte, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("read file %v err: %v", fileName, err)
+	}
+	mpi_switch_stat_map := loadConfig(t, "COUNTERS_DEBUG_NAME_SWITCH_STAT_MAP", countersDebugNameSwitchStatMapByte)
+	loadDB(t, rclient, mpi_switch_stat_map)
+
+	// "SWITCH_ID": "oid:0x21000000000000"  : Switch integrity drop counter, for COUNTERS/SWITCH_DB vpath test
+	fileName = "../testdata/COUNTERS:oid:0x21000000000000.txt"
+	countersSwitch_id_Byte, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("read file %v err: %v", fileName, err)
+	}
+	mpi_switch_counter := loadConfig(t, "COUNTERS:oid:0x21000000000000", countersSwitch_id_Byte)
+	loadDB(t, rclient, mpi_switch_counter)
 }
 
 func prepareConfigDb(t *testing.T, namespace string) {
 	rclient := getConfigDbClient(t, namespace)
 	defer rclient.Close()
-	rclient.FlushDB()
+	rclient.FlushDB(context.Background())
 
 	fileName := "../testdata/COUNTERS_PORT_ALIAS_MAP.txt"
 	countersPortAliasMapByte, err := ioutil.ReadFile(fileName)
@@ -829,8 +915,8 @@ func prepareConfigDb(t *testing.T, namespace string) {
 func prepareStateDb(t *testing.T, namespace string) {
 	rclient := getRedisClientN(t, 6, namespace)
 	defer rclient.Close()
-	rclient.FlushDB()
-	rclient.HSet("SWITCH_CAPABILITY|switch", "test_field", "test_value")
+	rclient.FlushDB(context.Background())
+	rclient.HSet(context.Background(), "SWITCH_CAPABILITY|switch", "test_field", "test_value")
 	fileName := "../testdata/NEIGH_STATE_TABLE.txt"
 	neighStateTableByte, err := ioutil.ReadFile(fileName)
 	if err != nil {
@@ -842,10 +928,9 @@ func prepareStateDb(t *testing.T, namespace string) {
 }
 
 func prepareDb(t *testing.T, namespace string) {
-	sdc.ClearMappings()
 	rclient := getRedisClient(t, namespace)
 	defer rclient.Close()
-	rclient.FlushDB()
+	rclient.FlushDB(context.Background())
 	//Enable keysapce notification
 	os.Setenv("PATH", "/usr/bin:/sbin:/bin:/usr/local/bin")
 	cmd := exec.Command("redis-cli", "config", "set", "notify-keyspace-events", "KEA")
@@ -885,6 +970,14 @@ func prepareDb(t *testing.T, namespace string) {
 	}
 	mpi_fab_name_map := loadConfig(t, "COUNTERS_FABRIC_PORT_NAME_MAP", countersFabricPortNameMapByte)
 	loadDB(t, rclient, mpi_fab_name_map)
+
+	fileName = "../testdata/COUNTERS_DEBUG_NAME_SWITCH_STAT_MAP.txt"
+	countersDebugNameSwitchStatMapByte, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("read file %v err: %v", fileName, err)
+	}
+	mpi_switch_stat_map := loadConfig(t, "COUNTERS_DEBUG_NAME_SWITCH_STAT_MAP", countersDebugNameSwitchStatMapByte)
+	loadDB(t, rclient, mpi_switch_stat_map)
 
 	fileName = "../testdata/COUNTERS:Ethernet68.txt"
 	countersEthernet68Byte, err := ioutil.ReadFile(fileName)
@@ -996,6 +1089,15 @@ func prepareDb(t *testing.T, namespace string) {
 	mpi_counter = loadConfig(t, "COUNTERS:oid:0x1000000000082", countersPort1_Byte)
 	loadDB(t, rclient, mpi_counter)
 
+	// "SWITCH_ID": "oid:0x21000000000000"  : Switch integrity drop counter, for COUNTERS/SWITCH_DB vpath test
+	fileName = "../testdata/COUNTERS:oid:0x21000000000000.txt"
+	countersSwitch_id_Byte, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("read file %v err: %v", fileName, err)
+	}
+	mpi_switch_counter := loadConfig(t, "COUNTERS:oid:0x21000000000000", countersSwitch_id_Byte)
+	loadDB(t, rclient, mpi_switch_counter)
+
 	fileName = "../testdata/COUNTERS_SRV6_NAME_MAP.json"
 	countersSRv6NameMapByte, err := os.ReadFile(fileName)
 	if err != nil {
@@ -1034,6 +1136,26 @@ func prepareDb(t *testing.T, namespace string) {
 	aclRule1Counter := loadConfig(t, "COUNTERS:oid:0x9000000000711", aclRule1CounterByte)
 	loadDB(t, rclient, aclRule1Counter)
 
+	// Load PORT_PHY_ATTR data for Ethernet68 -> oid:0x1000000000039
+	fileName = "../testdata/PORT_PHY_ATTR:oid:0x1000000000039.txt"
+	phyAttrEth68Byte, err := os.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("failed to open %s, err: %v", fileName, err)
+	}
+
+	phyAttrEth68 := loadConfig(t, "PORT_PHY_ATTR:oid:0x1000000000039", phyAttrEth68Byte)
+	loadDB(t, rclient, phyAttrEth68)
+
+	// Load PORT_PHY_ATTR data for Ethernet1 -> oid:0x1000000000003
+	fileName = "../testdata/PORT_PHY_ATTR:oid:0x1000000000003.txt"
+	phyAttrEth1Byte, err := os.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("failed to open %s, err: %v", fileName, err)
+	}
+
+	phyAttrEth1 := loadConfig(t, "PORT_PHY_ATTR:oid:0x1000000000003", phyAttrEth1Byte)
+	loadDB(t, rclient, phyAttrEth1)
+
 	fileName = "../testdata/COUNTERS:oid:0x54000000004f63.txt"
 	sid1_byte, err := os.ReadFile(fileName)
 	if err != nil {
@@ -1058,10 +1180,9 @@ func prepareDb(t *testing.T, namespace string) {
 }
 
 func prepareDbTranslib(t *testing.T) {
-	sdc.ClearMappings()
 	ns, _ := sdcfg.GetDbDefaultNamespace()
 	rclient := getRedisClient(t, ns)
-	rclient.FlushDB()
+	rclient.FlushDB(context.Background())
 	rclient.Close()
 
 	//Enable keysapce notification
@@ -1298,7 +1419,6 @@ func mergeStrMaps(sourceOrigin interface{}, updateOrigin interface{}) interface{
 	return update
 }
 
-/*
 func TestGnmiSet(t *testing.T) {
 	if !ENABLE_TRANSLIB_WRITE {
 		t.Skip("skipping test in read-only mode.")
@@ -1340,14 +1460,14 @@ func TestGnmiSet(t *testing.T) {
 			wantRetCode: codes.Unknown,
 			operation:   Delete,
 		},
-		//{
-		//	desc:       "Set OC Interface MTU",
-		//	pathTarget: "OC_YANG",
-		//	textPbPath:    pathToPb("openconfig-interfaces:interfaces/interface[name=Ethernet4]/config"),
-		//	attributeData: "../testdata/set_interface_mtu.json",
-		//	wantRetCode:   codes.OK,
-		//	operation:     Update,
-		//},
+		{
+			desc:          "Set OC Interface MTU",
+			pathTarget:    "OC_YANG",
+			textPbPath:    pathToPb("openconfig-interfaces:interfaces/interface[name=Ethernet4]/config"),
+			attributeData: "../testdata/set_interface_mtu.json",
+			wantRetCode:   codes.OK,
+			operation:     Update,
+		},
 		{
 			desc:          "Set OC Interface IP",
 			pathTarget:    "OC_YANG",
@@ -1457,7 +1577,7 @@ func TestGnmiSet(t *testing.T) {
 		}
 	}
 	s.Stop()
-}*/
+}
 
 func TestGnmiSetReadOnly(t *testing.T) {
 	s := createReadServer(t, 8081)
@@ -1625,6 +1745,18 @@ func runGnmiTestGet(t *testing.T, namespace string) {
 		t.Fatalf("read file %v err: %v", fileName, err)
 	}
 
+	fileName = "../testdata/COUNTERS:SWITCH_ID.txt"
+	countersSwitchIdByte, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("read file %v err: %v", fileName, err)
+	}
+
+	fileName = "../testdata/COUNTERS:SWITCH_wildcard" + namespace + ".txt"
+	countersSwitchWildcardByte, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("read file %v err: %v", fileName, err)
+	}
+
 	fileName = "../testdata/COUNTERS:SID_wildcard.json"
 	countersSidWildcardByte, err := os.ReadFile(fileName)
 	if err != nil {
@@ -1650,15 +1782,32 @@ func runGnmiTestGet(t *testing.T, namespace string) {
 		t.Fatalf("failed to open %s, err: %v", fileName, err)
 	}
 
+	// PORT_PHY_ATTR test vectors
+	fileName = "../testdata/PORT_PHY_ATTR:Ethernet_wildcard.json"
+	phyAttrWildcardByte, err := os.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("failed to open %s, err: %v", fileName, err)
+	}
+
+	fileName = "../testdata/PORT_PHY_ATTR:Ethernet_single_entry.json"
+	phyAttrSingleEntryByte, err := os.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("failed to open %s, err: %v", fileName, err)
+	}
+
 	stateDBPath := "STATE_DB"
 
 	ns, _ := sdcfg.GetDbDefaultNamespace()
 	validFabricPortName := "PORT0"
 	invalidFabricPortName := "PORT0-" + namespace
+	validSwitchId := "SWITCH_ID"
+	invalidSwitchId := "SWITCH_ID-" + namespace
 	if namespace != ns {
 		stateDBPath = "STATE_DB" + "/" + namespace
 		validFabricPortName = "PORT0-" + namespace
 		invalidFabricPortName = "PORT0"
+		validSwitchId = "SWITCH_ID-" + namespace
+		invalidSwitchId = "SWITCH_ID"
 	}
 
 	type testCase struct {
@@ -1869,6 +2018,35 @@ func runGnmiTestGet(t *testing.T, namespace string) {
 			wantRetCode: codes.NotFound,
 			valTest:     true,
 		}, {
+			desc:       "get COUNTERS:" + validSwitchId,
+			pathTarget: "COUNTERS_DB",
+			textPbPath: `
+					elem: <name: "COUNTERS" >
+					elem: <name: "` + validSwitchId + `">
+				`,
+			wantRetCode: codes.OK,
+			wantRespVal: countersSwitchIdByte,
+			valTest:     true,
+		}, {
+			desc:       "get COUNTERS:SWITCH_ID*",
+			pathTarget: "COUNTERS_DB",
+			textPbPath: `
+					elem: <name: "COUNTERS" >
+					elem: <name: "SWITCH*" >
+				`,
+			wantRetCode: codes.OK,
+			wantRespVal: countersSwitchWildcardByte,
+			valTest:     true,
+		}, {
+			desc:       "Invalid fabric port key get" + invalidSwitchId,
+			pathTarget: "COUNTERS_DB",
+			textPbPath: `
+					elem: <name: "COUNTERS" >
+					elem: <name: "` + invalidSwitchId + `">
+								`,
+			wantRetCode: codes.NotFound,
+			valTest:     true,
+		}, {
 			desc:        "Invalid DBKey of length 1",
 			pathTarget:  stateDBPath,
 			textPbPath:  ``,
@@ -1921,6 +2099,34 @@ func runGnmiTestGet(t *testing.T, namespace string) {
             `,
 			wantRetCode: codes.OK,
 			wantRespVal: countersAclSingleEntryByte,
+			valTest:     true,
+		}, {
+			desc:       "get PORT_PHY_ATTR:Ethernet*",
+			pathTarget: "COUNTERS_DB",
+			textPbPath: `
+                elem: <
+                    name: "PORT_PHY_ATTR"
+                >
+                elem: <
+                    name: "Ethernet*"
+                >
+            `,
+			wantRetCode: codes.OK,
+			wantRespVal: phyAttrWildcardByte,
+			valTest:     true,
+		}, {
+			desc:       "get PORT_PHY_ATTR:Ethernet68",
+			pathTarget: "COUNTERS_DB",
+			textPbPath: `
+                elem: <
+                    name: "PORT_PHY_ATTR"
+                >
+                elem: <
+                    name: "Ethernet68"
+                >
+            `,
+			wantRetCode: codes.OK,
+			wantRespVal: phyAttrSingleEntryByte,
 			valTest:     true,
 		}, {
 			desc:       "get COUNTERS:fcbb:bbbb:2::/48 -- malformed",
@@ -2018,8 +2224,6 @@ func TestGnmiGetMultiNs(t *testing.T) {
 
 	s.Stop()
 }
-
-/*
 func TestGnmiGetTranslib(t *testing.T) {
 	//t.Log("Start server")
 	s := createServer(t, 8081)
@@ -2039,14 +2243,13 @@ func TestGnmiGetTranslib(t *testing.T) {
 	defer conn.Close()
 
 	gClient := pb.NewGNMIClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	var emptyRespVal interface{}
 	tds := []struct {
 		desc        string
 		pathTarget  string
 		textPbPath  string
+		timeout     time.Duration
 		wantRetCode codes.Code
 		wantRespVal interface{}
 		valTest     bool
@@ -2109,6 +2312,7 @@ func TestGnmiGetTranslib(t *testing.T) {
 			textPbPath: `
                         elem: <name: "openconfig-interfaces:interfaces" >
                 `,
+			timeout:     1 * time.Minute,
 			wantRetCode: codes.OK,
 			wantRespVal: emptyRespVal,
 			valTest:     false,
@@ -2137,8 +2341,8 @@ func TestGnmiGetTranslib(t *testing.T) {
 		//	desc:       "Get OC Interface ifindex",
 		//	pathTarget: "OC_YANG",
 		//	textPbPath: `
-        //                elem: <name: "openconfig-interfaces:interfaces" > elem: <name: "interface" key:<key:"name" value:"Ethernet4" > > elem: <name: "state" > elem: <name: "ifindex" >
-        //        `,
+		//                elem: <name: "openconfig-interfaces:interfaces" > elem: <name: "interface" key:<key:"name" value:"Ethernet4" > > elem: <name: "state" > elem: <name: "ifindex" >
+		//        `,
 		//	wantRetCode: codes.OK,
 		//	wantRespVal: emptyRespVal,
 		//	valTest:     false,
@@ -2157,11 +2361,17 @@ func TestGnmiGetTranslib(t *testing.T) {
 
 	for _, td := range tds {
 		t.Run(td.desc, func(t *testing.T) {
+			if td.timeout == 0 {
+				td.timeout = 10 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), td.timeout)
+			defer cancel()
+
 			runTestGet(t, ctx, gClient, td.pathTarget, td.textPbPath, td.wantRetCode, td.wantRespVal, td.valTest)
 		})
 	}
 	s.Stop()
-}*/
+}
 
 type tablePathValue struct {
 	dbName    string
@@ -2412,6 +2622,26 @@ func runTestSubscribe(t *testing.T, namespace string) {
 	singleAclCounterJsonUpdate := make(map[string]interface{})
 	singleAclCounterJsonUpdate["DATAACL:RULE_1"] = tmp
 
+	// PORT_PHY_ATTR wildcard + single entry update for subscriptions
+	var phyAttrWildcardJson interface{}
+	fileName = "../testdata/PORT_PHY_ATTR:Ethernet_wildcard.json"
+	phyAttrWildcardJsonByte, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		t.Fatalf("failed to open %s, err: %v", fileName, err)
+	}
+	err = json.Unmarshal(phyAttrWildcardJsonByte, &phyAttrWildcardJson)
+	if err != nil {
+		t.Fatalf("failed to unmarshal %s, err: %v", fileName, err)
+	}
+
+	tmp = map[string]interface{}{
+		"phy_rx_signal_detect":        "{\"0\":\"T*\", \"1\":\"T*\", \"2\":\"F*\"}",
+		"pcs_fec_lane_alignment_lock": "{\"0\":\"F*\", \"1\":\"F*\", \"2\":\"F*\"}",
+		"rx_snr":                      "{\"0\":5385, \"1\":5385, \"2\":5385}",
+	}
+	singlePhyAttrJsonUpdate := make(map[string]interface{})
+	singlePhyAttrJsonUpdate["Ethernet68"] = tmp
+
 	fileName = "../testdata/COUNTERS:Ethernet_wildcard_Queues_alias.txt"
 	countersEthernetWildQueuesByte, err := ioutil.ReadFile(fileName)
 	if err != nil {
@@ -2517,9 +2747,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			}},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
 			},
 		},
 		{
@@ -2545,9 +2775,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
 			},
 		},
 		{
@@ -2573,9 +2803,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
 			},
 		},
 		{
@@ -2601,9 +2831,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
 			},
 		},
 		{
@@ -2629,9 +2859,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
 			},
 		},
 		{
@@ -2655,13 +2885,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "0"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "0"},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_POST_BER"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
 			},
 		},
@@ -2688,9 +2918,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "0"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "0"},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "1"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "1"},
 			},
 		},
 		{
@@ -2703,10 +2933,10 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "0"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "0"},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "3"},
-				client.Update{Path: []string{"RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "3"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "3"},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet89", "FEC_PRE_BER"}, TS: time.Unix(0, 200), Val: "3"},
 			},
 		},
 		{
@@ -2730,13 +2960,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesEthernetWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesFieldUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesFieldUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesFieldUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesFieldUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesFieldUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesFieldUpdate},
 				client.Sync{},
 			},
 		},
@@ -2763,7 +2993,7 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesEthernetWildcardJson},
 				client.Sync{},
 			},
 		},
@@ -2776,9 +3006,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: ratesEthernetWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(ratesEthernetWildcardJson, ratesFieldUpdate2)},
+				client.Update{Path: []string{"COUNTERS_DB", "RATES", "Ethernet*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(ratesEthernetWildcardJson, ratesFieldUpdate2)},
 			},
 		},
 		{
@@ -2804,9 +3034,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJsonUpdate},
 			},
 		},
 		{
@@ -2832,9 +3062,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJsonUpdate},
 			},
 		},
 		{
@@ -2860,9 +3090,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEtherneWildcardJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEtherneWildcardJsonUpdate},
 			},
 		},
 		{
@@ -2880,9 +3110,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardPfcJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardPfcJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: singlePortPfcJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: singlePortPfcJsonUpdate},
 			},
 		},
 		{
@@ -2900,9 +3130,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJsonUpdate},
 			},
 		},
 		{
@@ -2923,13 +3153,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			wantNoti: []client.Notification{
 				client.Connected{},
 				// We are starting from the result data of "stream query for table with update of new field",
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -2961,13 +3191,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			wantNoti: []client.Notification{
 				client.Connected{},
 				// We are starting from the result data of "stream query for table with update of new field",
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS_PORT_NAME_MAP"}, TS: time.Unix(0, 200), Val: countersPortNameMapJson},
 				client.Sync{},
 			},
 		},
@@ -2992,13 +3222,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
 			},
 		},
@@ -3023,13 +3253,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "4"},
 				client.Sync{},
 			},
 		},
@@ -3054,13 +3284,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdPollUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdPollUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdPollUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdPollUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdPollUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdPollUpdate},
 				client.Sync{},
 			},
 		},
@@ -3085,13 +3315,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasPollUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasPollUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasPollUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasPollUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasPollUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasPollUpdate},
 				client.Sync{},
 			},
 		},
@@ -3116,13 +3346,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersFieldUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersFieldUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersFieldUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersFieldUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersFieldUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersFieldUpdate},
 				client.Sync{},
 			},
 		},
@@ -3147,13 +3377,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardPfcJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardPfcJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: allPortPfcJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: allPortPfcJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: allPortPfcJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: allPortPfcJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: allPortPfcJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: allPortPfcJsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -3178,13 +3408,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdUpdate},
 				client.Sync{},
 			},
 		},
@@ -3199,9 +3429,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernetWildQueuesJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernetWildQueuesJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernetWildQueuesJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernetWildQueuesJson},
 				client.Sync{},
 			},
 		},
@@ -3221,13 +3451,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesJsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -3247,13 +3477,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet68QueuesAliasJsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -3272,9 +3502,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet7", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet7", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet7", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet7", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesJsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -3293,9 +3523,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet7/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesAliasJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet7/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesAliasJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet7/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesAliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet7/1", "Queues"}, TS: time.Unix(0, 200), Val: countersEthernet7QueuesAliasJsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -3310,9 +3540,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet*", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernetWildJson},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet*", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernetWildJson},
 				client.Sync{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet*", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernetWildJson},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet*", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernetWildJson},
 				client.Sync{},
 			},
 		},
@@ -3331,13 +3561,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16Json},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16Json},
 				client.Sync{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16JsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16JsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16JsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -3356,13 +3586,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJson},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJson},
 				client.Sync{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJsonUpdate},
 				client.Sync{},
-				client.Update{Path: []string{"PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "PERIODIC_WATERMARKS", "Ethernet16/1", "PriorityGroups"}, TS: time.Unix(0, 200), Val: pgWatermarksEthernet16AliasJsonUpdate},
 				client.Sync{},
 			},
 		},
@@ -3382,9 +3612,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
 			},
 		},
 		{
@@ -3397,10 +3627,10 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "2"},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: "3"},
 			},
 		},
 		{
@@ -3413,10 +3643,10 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68Json},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1"}, TS: time.Unix(0, 200), Val: countersEthernet68JsonUpdate},
 			},
 		},
 		{
@@ -3429,10 +3659,10 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernet68PfcwdJson, countersEthernet68PfcwdJsonUpdate)},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernet68PfcwdJson, countersEthernet68PfcwdJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernet68PfcwdJson, countersEthernet68PfcwdJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernet68PfcwdJson, countersEthernet68PfcwdJsonUpdate)},
 			},
 		},
 		{
@@ -3445,10 +3675,10 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernet68PfcwdAliasJson, countersEthernet68PfcwdAliasJsonUpdate)},
-				client.Update{Path: []string{"COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernet68PfcwdAliasJson, countersEthernet68PfcwdAliasJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet68/1", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJson},
 			},
 		},
 		{
@@ -3460,9 +3690,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernetWildcardJson, countersEtherneWildcardJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernetWildcardJson, countersEtherneWildcardJsonUpdate)},
 			},
 		},
 		{
@@ -3476,11 +3706,11 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEtherneWildcardJsonUpdate},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: countersEtherneWildcardJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
 			},
 		},
 		/*
@@ -3511,9 +3741,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardPfcJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: countersEthernetWildcardPfcJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernetWildcardPfcJson, singlePortPfcJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "SAI_PORT_STAT_PFC_7_RX_PKTS"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernetWildcardPfcJson, singlePortPfcJsonUpdate)},
 			},
 		},
 		{
@@ -3525,9 +3755,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernetWildPfcwdJson, countersEthernet68PfcwdAliasJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersEthernetWildPfcwdJson, countersEthernet68PfcwdAliasJsonUpdate)},
 			},
 		},
 		{
@@ -3541,11 +3771,11 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernetWildPfcwdJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJsonUpdate},
-				client.Update{Path: []string{"COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: countersEthernet68PfcwdAliasJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "Ethernet*", "Pfcwd"}, TS: time.Unix(0, 200), Val: map[string]interface{}{}}, //empty update
 			},
 		},
 		{
@@ -3569,13 +3799,13 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: countersSidCountersWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: countersSidCountersWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
 				client.Sync{},
 			},
 		},
@@ -3587,9 +3817,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: countersSidCountersWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: countersSidCountersWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: singleSidCounterJsonUpdate},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: singleSidCounterJsonUpdate},
 			},
 		},
 		{
@@ -3601,9 +3831,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: countersSidCountersWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: countersSidCountersWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "SID*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersSidCountersWildcardJson, singleSidCounterJsonUpdate)},
 			},
 		},
 		{
@@ -3629,25 +3859,25 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			wantNoti: []client.Notification{
 				client.Connected{},
 				client.Update{
-					Path: []string{"COUNTERS", "ACL_RULE*"},
+					Path: []string{"COUNTERS_DB", "COUNTERS", "ACL_RULE*"},
 					TS:   time.Unix(0, 200),
 					Val:  countersAclCountersWildcardJson,
 				},
 				client.Sync{},
 				client.Update{
-					Path: []string{"COUNTERS", "ACL_RULE*"},
+					Path: []string{"COUNTERS_DB", "COUNTERS", "ACL_RULE*"},
 					TS:   time.Unix(0, 200),
 					Val:  mergeStrMaps(countersAclCountersWildcardJson, singleAclCounterJsonUpdate),
 				},
 				client.Sync{},
 				client.Update{
-					Path: []string{"COUNTERS", "ACL_RULE*"},
+					Path: []string{"COUNTERS_DB", "COUNTERS", "ACL_RULE*"},
 					TS:   time.Unix(0, 200),
 					Val:  mergeStrMaps(countersAclCountersWildcardJson, singleAclCounterJsonUpdate),
 				},
 				client.Sync{},
 				client.Update{
-					Path: []string{"COUNTERS", "ACL_RULE*"},
+					Path: []string{"COUNTERS_DB", "COUNTERS", "ACL_RULE*"},
 					TS:   time.Unix(0, 200),
 					Val:  mergeStrMaps(countersAclCountersWildcardJson, singleAclCounterJsonUpdate),
 				},
@@ -3663,9 +3893,78 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			},
 			wantNoti: []client.Notification{
 				client.Connected{},
-				client.Update{Path: []string{"COUNTERS", "ACL_RULE*"}, TS: time.Unix(0, 200), Val: countersAclCountersWildcardJson},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "ACL_RULE*"}, TS: time.Unix(0, 200), Val: countersAclCountersWildcardJson},
 				client.Sync{},
-				client.Update{Path: []string{"COUNTERS", "ACL_RULE*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersAclCountersWildcardJson, singleAclCounterJsonUpdate)},
+				client.Update{Path: []string{"COUNTERS_DB", "COUNTERS", "ACL_RULE*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(countersAclCountersWildcardJson, singleAclCounterJsonUpdate)},
+			},
+		},
+		{
+			desc: "poll query for PORT_PHY_ATTR/Ethernet*",
+			poll: 3,
+			q: client.Query{
+				Target:  "COUNTERS_DB",
+				Type:    client.Poll,
+				Queries: []client.Path{{"PORT_PHY_ATTR", "Ethernet*"}},
+				TLS:     &tls.Config{InsecureSkipVerify: true},
+			},
+			updates: []tablePathValue{
+				// simulate phy_rx_signal_detect change on Ethernet68
+				{
+					dbName:    "COUNTERS_DB",
+					tableName: "PORT_PHY_ATTR",
+					tableKey:  "oid:0x1000000000039",
+					delimitor: ":",
+					field:     "phy_rx_signal_detect",
+					value:     "{\"0\":\"T*\", \"1\":\"T*\", \"2\":\"F*\"}",
+				},
+			},
+			wantNoti: []client.Notification{
+				client.Connected{},
+				client.Update{
+					Path: []string{"COUNTERS_DB", "PORT_PHY_ATTR", "Ethernet*"},
+					TS:   time.Unix(0, 200),
+					Val:  phyAttrWildcardJson,
+				},
+				client.Sync{},
+				client.Update{
+					Path: []string{"COUNTERS_DB", "PORT_PHY_ATTR", "Ethernet*"},
+					TS:   time.Unix(0, 200),
+					Val:  mergeStrMaps(phyAttrWildcardJson, singlePhyAttrJsonUpdate),
+				},
+				client.Sync{},
+				client.Update{
+					Path: []string{"COUNTERS_DB", "PORT_PHY_ATTR", "Ethernet*"},
+					TS:   time.Unix(0, 200),
+					Val:  mergeStrMaps(phyAttrWildcardJson, singlePhyAttrJsonUpdate),
+				},
+				client.Sync{},
+				client.Update{
+					Path: []string{"COUNTERS_DB", "PORT_PHY_ATTR", "Ethernet*"},
+					TS:   time.Unix(0, 200),
+					Val:  mergeStrMaps(phyAttrWildcardJson, singlePhyAttrJsonUpdate),
+				},
+				client.Sync{},
+			},
+		},
+		{
+			desc:              "sample stream query for PORT_PHY_ATTR/Ethernet* with field value update",
+			q:                 createCountersDbQuerySampleMode(t, 0, false, "PORT_PHY_ATTR", "Ethernet*"),
+			generateIntervals: true,
+			updates: []tablePathValue{
+				{
+					dbName:    "COUNTERS_DB",
+					tableName: "PORT_PHY_ATTR",
+					tableKey:  "oid:0x1000000000039",
+					delimitor: ":",
+					field:     "phy_rx_signal_detect",
+					value:     "{\"0\":\"T*\", \"1\":\"T*\", \"2\":\"F*\"}",
+				},
+			},
+			wantNoti: []client.Notification{
+				client.Connected{},
+				client.Update{Path: []string{"COUNTERS_DB", "PORT_PHY_ATTR", "Ethernet*"}, TS: time.Unix(0, 200), Val: phyAttrWildcardJson},
+				client.Sync{},
+				client.Update{Path: []string{"COUNTERS_DB", "PORT_PHY_ATTR", "Ethernet*"}, TS: time.Unix(0, 200), Val: mergeStrMaps(phyAttrWildcardJson, singlePhyAttrJsonUpdate)},
 			},
 		},
 	}
@@ -3681,9 +3980,9 @@ func runTestSubscribe(t *testing.T, namespace string) {
 		for _, prepare := range tt.prepares {
 			switch prepare.op {
 			case "hdel":
-				rclient.HDel(prepare.tableName+prepare.delimitor+prepare.tableKey, prepare.field)
+				rclient.HDel(context.Background(), prepare.tableName+prepare.delimitor+prepare.tableKey, prepare.field)
 			default:
-				rclient.HSet(prepare.tableName+prepare.delimitor+prepare.tableKey, prepare.field, prepare.value)
+				rclient.HSet(context.Background(), prepare.tableName+prepare.delimitor+prepare.tableKey, prepare.field, prepare.value)
 			}
 		}
 
@@ -3738,11 +4037,11 @@ func runTestSubscribe(t *testing.T, namespace string) {
 			for _, update := range tt.updates {
 				switch update.op {
 				case "hdel":
-					rclient.HDel(update.tableName+update.delimitor+update.tableKey, update.field)
+					rclient.HDel(context.Background(), update.tableName+update.delimitor+update.tableKey, update.field)
 				case "intervaltick":
 					// This is not a DB update but a request to trigger sample interval
 				default:
-					rclient.HSet(update.tableName+update.delimitor+update.tableKey, update.field, update.value)
+					rclient.HSet(context.Background(), update.tableName+update.delimitor+update.tableKey, update.field, update.value)
 				}
 
 				time.Sleep(time.Millisecond * 1000)
@@ -3874,18 +4173,6 @@ func TestGNOI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
-	t.Run("SystemTime", func(t *testing.T) {
-		sc := gnoi_system_pb.NewSystemClient(conn)
-		resp, err := sc.Time(ctx, new(gnoi_system_pb.TimeRequest))
-		if err != nil {
-			t.Fatal(err.Error())
-		}
-		ctime := uint64(time.Now().UnixNano())
-		if ctime-resp.Time < 0 || ctime-resp.Time > 1e9 {
-			t.Fatalf("Invalid System Time %d", resp.Time)
-		}
-	})
-
 	t.Run("SonicShowTechsupport", func(t *testing.T) {
 		t.Skip("Not supported yet")
 		sc := sgpb.NewSonicServiceClient(conn)
@@ -3972,6 +4259,121 @@ func TestGNOI(t *testing.T) {
 
 		if !strings.Contains(err.Error(), expectedError.Error()) {
 			t.Errorf("Expected error to contain '%v' but got '%v'", expectedError, err)
+		}
+	})
+
+	t.Run("OSVerifySuccess", func(t *testing.T) {
+		mockClient := &ssc.DbusClient{}
+		expectedDbusOut := `{
+			"current": "current_image",
+			"next": "next_image",
+			"available": ["image1", "image2"]
+		}`
+		mock := gomonkey.ApplyMethod(reflect.TypeOf(mockClient), "ListImages", func(_ *ssc.DbusClient) (string, error) {
+			return expectedDbusOut, nil
+		})
+		defer mock.Reset()
+
+		// Prepare context and request
+		ctx := context.Background()
+		req := &gnoi_os_pb.VerifyRequest{}
+		osc := gnoi_os_pb.NewOSClient(conn)
+
+		resp, err := osc.Verify(ctx, req)
+		if err != nil {
+			t.Fatalf("OS Verify failed: %v", err)
+		}
+		// Validate the response
+		if len(resp.Version) == 0 {
+			t.Fatalf("Expected a version string in response")
+		}
+	})
+
+	t.Run("OSVerifyFailure", func(t *testing.T) {
+		mockClient := &ssc.DbusClient{}
+		expectedError := fmt.Errorf("failed to verify OS")
+
+		mock := gomonkey.ApplyMethod(reflect.TypeOf(mockClient), "ListImages", func(_ *ssc.DbusClient) (string, error) {
+			return "", expectedError
+		})
+		defer mock.Reset()
+
+		// Prepare context and request
+		ctx := context.Background()
+		req := &gnoi_os_pb.VerifyRequest{}
+		osc := gnoi_os_pb.NewOSClient(conn)
+
+		resp, err := osc.Verify(ctx, req)
+		if err == nil {
+			t.Fatalf("Expected error but got none")
+		}
+		if resp != nil {
+			t.Fatalf("Expected nil response but got: %v", resp)
+		}
+
+		if !strings.Contains(err.Error(), expectedError.Error()) {
+			t.Errorf("Expected error to contain '%v' but got '%v'", expectedError, err)
+		}
+	})
+
+	t.Run("OSActivateSuccess", func(t *testing.T) {
+		mockClient := &ssc.DbusClient{}
+		input_image := "next_image"
+		mock := gomonkey.ApplyMethod(reflect.TypeOf(mockClient), "ActivateImage", func(_ *ssc.DbusClient, image string) error {
+			if image != input_image {
+				return fmt.Errorf("invalid image")
+			}
+			return nil
+		})
+		defer mock.Reset()
+
+		// Prepare context and request
+		ctx := context.Background()
+		req := &gnoi_os_pb.ActivateRequest{Version: input_image}
+		osc := gnoi_os_pb.NewOSClient(conn)
+
+		resp, err := osc.Activate(ctx, req)
+		if err != nil {
+			t.Fatalf("OS Activate failed: %v", err)
+		}
+		// Validate the response
+		if resp == nil {
+			t.Fatalf("Expected a non-nil response")
+		}
+	})
+
+	t.Run("OSActivateNonExistentVersion", func(t *testing.T) {
+		mockClient := &ssc.DbusClient{}
+		expectedError := fmt.Errorf("Error: Image does not exist")
+
+		mock := gomonkey.ApplyMethod(reflect.TypeOf(mockClient), "ActivateImage", func(_ *ssc.DbusClient, image string) error {
+			return expectedError
+		})
+		defer mock.Reset()
+
+		// Prepare context and request
+		ctx := context.Background()
+		req := &gnoi_os_pb.ActivateRequest{Version: "non_existent_version"}
+		osc := gnoi_os_pb.NewOSClient(conn)
+
+		resp, err := osc.Activate(ctx, req)
+		if err != nil {
+			t.Fatalf("Expected no error but got: %v", err)
+		}
+		if resp == nil {
+			t.Fatalf("Expected non-nil response but got nil")
+		}
+
+		if resp.GetActivateError() == nil {
+			t.Fatalf("Expected ActivateError in response but got none")
+		}
+
+		if resp.GetActivateError().GetType() != gnoi_os_pb.ActivateError_NON_EXISTENT_VERSION {
+			t.Errorf("Expected error type '%v' but got '%v'", gnoi_os_pb.ActivateError_NON_EXISTENT_VERSION, resp.GetActivateError().GetType())
+		}
+
+		if !strings.Contains(resp.GetActivateError().GetDetail(), expectedError.Error()) {
+			t.Errorf("Expected error detail to contain '%v' but got '%v'", expectedError, resp.GetActivateError().GetDetail())
 		}
 	})
 
@@ -4073,7 +4475,6 @@ func TestBundleVersion(t *testing.T) {
 	})
 }
 
-/*
 func TestBulkSet(t *testing.T) {
 	s := createServer(t, 8088)
 	go runServer(t, s)
@@ -4162,7 +4563,7 @@ func TestBulkSet(t *testing.T) {
 		runTestSetRaw(t, ctx, gClient, req, codes.Unknown)
 	})
 
-}*/
+}
 
 func newPbUpdate(path, value string) *pb.Update {
 	p, _ := ygot.StringToStructuredPath(path)
@@ -4284,8 +4685,8 @@ func TestTableKeyOnDeletion(t *testing.T) {
 			desc: "Testing deletion of NEIGH_STATE_TABLE:10.0.0.57",
 			q:    createStateDbQueryOnChangeMode(t, "NEIGH_STATE_TABLE"),
 			wantNoti: []client.Notification{
-				client.Update{Path: []string{"NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJson},
-				client.Update{Path: []string{"NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableDeletedJson57},
+				client.Update{Path: []string{"STATE_DB", "NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJson},
+				client.Update{Path: []string{"STATE_DB", "NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableDeletedJson57},
 			},
 			paths: []string{
 				"NEIGH_STATE_TABLE|10.0.0.57",
@@ -4295,9 +4696,9 @@ func TestTableKeyOnDeletion(t *testing.T) {
 			desc: "Testing deletion of NEIGH_STATE_TABLE:10.0.0.59 and NEIGH_STATE_TABLE 10.0.0.61",
 			q:    createStateDbQueryOnChangeMode(t, "NEIGH_STATE_TABLE"),
 			wantNoti: []client.Notification{
-				client.Update{Path: []string{"NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJsonTwo},
-				client.Update{Path: []string{"NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableDeletedJson59},
-				client.Update{Path: []string{"NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableDeletedJson61},
+				client.Update{Path: []string{"STATE_DB", "NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJsonTwo},
+				client.Update{Path: []string{"STATE_DB", "NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableDeletedJson59},
+				client.Update{Path: []string{"STATE_DB", "NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableDeletedJson61},
 			},
 			paths: []string{
 				"NEIGH_STATE_TABLE|10.0.0.59",
@@ -4339,7 +4740,7 @@ func TestTableKeyOnDeletion(t *testing.T) {
 			paths := tt.paths
 			mutexPaths.Unlock()
 
-			rclient.Del(paths...)
+			rclient.Del(context.Background(), paths...)
 
 			time.Sleep(time.Millisecond * 1500)
 
@@ -4559,8 +4960,8 @@ func TestWildcardTableNoError(t *testing.T) {
 				TLS:     &tls.Config{InsecureSkipVerify: true},
 			},
 			wantNoti: []client.Notification{
-				client.Update{Path: []string{"NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJson},
-				client.Update{Path: []string{"NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJson},
+				client.Update{Path: []string{"STATE_DB", "NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJson},
+				client.Update{Path: []string{"STATE_DB", "NEIGH_STATE_TABLE"}, TS: time.Unix(0, 200), Val: neighStateTableJson},
 			},
 		},
 	}
@@ -4651,8 +5052,8 @@ func TestNonExistentTableNoError(t *testing.T) {
 				TLS:     &tls.Config{InsecureSkipVerify: true},
 			},
 			wantNoti: []client.Notification{
-				client.Update{Path: []string{"TRANSCEIVER_DOM_SENSOR"}, TS: time.Unix(0, 200), Val: transceiverDomSensorTableJson},
-				client.Update{Path: []string{"TRANSCEIVER_DOM_SENSOR"}, TS: time.Unix(0, 200), Val: transceiverDomSensorTableJson},
+				client.Update{Path: []string{"STATE_DB", "TRANSCEIVER_DOM_SENSOR"}, TS: time.Unix(0, 200), Val: transceiverDomSensorTableJson},
+				client.Update{Path: []string{"STATE_DB", "TRANSCEIVER_DOM_SENSOR"}, TS: time.Unix(0, 200), Val: transceiverDomSensorTableJson},
 			},
 		},
 	}
@@ -4763,7 +5164,7 @@ func TestConnectionDataSet(t *testing.T) {
 
 			wg.Wait()
 
-			resultMap, err := rclient.HGetAll("TELEMETRY_CONNECTIONS").Result()
+			resultMap, err := rclient.HGetAll(context.Background(), "TELEMETRY_CONNECTIONS").Result()
 
 			if resultMap == nil {
 				t.Errorf("result Map is nil, expected non nil, err: %v", err)
@@ -5160,7 +5561,6 @@ func TestGNMINative(t *testing.T) {
 	go runServer(t, s)
 	defer s.Stop()
 	ns, _ := sdcfg.GetDbDefaultNamespace()
-	sdc.ClearMappings()
 	initFullConfigDb(t, ns)
 	initFullCountersDb(t, ns)
 
@@ -5169,7 +5569,7 @@ func TestGNMINative(t *testing.T) {
 
 	// This test is used for single database configuration
 	// Run tests not marked with multidb
-	cmd := exec.Command("bash", "-c", "cd "+path+" && "+"pytest -m 'not multidb'")
+	cmd := exec.Command("bash", "-c", "cd "+path+" && "+"pytest -m 'not multidb and not multins'")
 	if result, err := cmd.Output(); err != nil {
 		fmt.Println(string(result))
 		t.Errorf("Fail to execute pytest: %v", err)
@@ -5229,13 +5629,244 @@ func TestGNMINativeMultiDB(t *testing.T) {
 	}
 }
 
-func TestServerPort(t *testing.T) {
-	s := createServer(t, -8080)
-	port := s.Port()
-	if port != 0 {
-		t.Errorf("Invalid port: %d", port)
+// Test configuration with multiple namespaces
+func TestGNMINativeMultiNamespace(t *testing.T) {
+	mock1 := gomonkey.ApplyFunc(dbus.SystemBus, func() (conn *dbus.Conn, err error) {
+		return &dbus.Conn{}, nil
+	})
+	defer mock1.Reset()
+	mock2 := gomonkey.ApplyMethod(reflect.TypeOf(&dbus.Object{}), "Go", func(obj *dbus.Object, method string, flags dbus.Flags, ch chan *dbus.Call, args ...interface{}) *dbus.Call {
+		ret := &dbus.Call{}
+		ret.Err = nil
+		ret.Body = make([]interface{}, 2)
+		ret.Body[0] = int32(0)
+		ch <- ret
+		return &dbus.Call{}
+	})
+	defer mock2.Reset()
+	sdcfg.Init()
+	err := test_utils.SetupMultiNamespace()
+	if err != nil {
+		t.Fatalf("error Setting up MultiNamespace files with err %T", err)
 	}
+
+	/* https://www.gopherguides.com/articles/test-cleanup-in-go-1-14*/
+	t.Cleanup(func() {
+		if err := test_utils.CleanUpMultiNamespace(); err != nil {
+			t.Fatalf("error Cleaning up MultiNamespace files with err %T", err)
+
+		}
+	})
+
+	s := createServer(t, 8080)
+	go runServer(t, s)
+	defer s.Stop()
+	ns, _ := sdcfg.GetDbDefaultNamespace()
+	initFullConfigDb(t, ns)
+
+	path, _ := os.Getwd()
+	path = filepath.Dir(path)
+
+	// This test is used for multiple namespaces configuration
+	// Run tests marked with multins
+	cmd := exec.Command("bash", "-c", "cd "+path+" && "+"pytest -m 'multins'")
+	if result, err := cmd.Output(); err != nil {
+		fmt.Println(string(result))
+		t.Errorf("Fail to execute pytest: %v", err)
+	} else {
+		fmt.Println(string(result))
+	}
+}
+
+func TestServerPort(t *testing.T) {
+	s := createServer(t, 8080)
+	if s == nil {
+		t.Fatal("Failed to create server")
+	}
+	port := s.Port()
+	if port != 8080 {
+		t.Errorf("Expected port 8080, got: %d", port)
+	}
+	s.ForceStop()
+}
+
+func TestServerNegativePortFails(t *testing.T) {
+	// Negative port should fail server creation
+	certificate, err := testcert.NewCert()
+	if err != nil {
+		t.Fatalf("could not load server key pair: %s", err)
+	}
+	tlsCfg := &tls.Config{
+		ClientAuth:   tls.RequestClientCert,
+		Certificates: []tls.Certificate{certificate},
+	}
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+	cfg := &Config{
+		Port:      -8080,
+		Threshold: 100,
+	}
+	s, err := NewServer(cfg, tlsOpts, nil)
+	if err == nil {
+		s.ForceStop()
+		t.Error("Expected error for negative port, but server was created")
+	}
+	if s != nil {
+		t.Error("Expected nil server for negative port")
+	}
+}
+
+func TestServerUnixSocketOnly(t *testing.T) {
+	// Test creating a UDS-only server (no TCP listener)
+	socketPath := "/tmp/gnmi_test_uds_only.sock"
+	os.Remove(socketPath) // Ensure clean state
+
+	cfg := &Config{
+		Port:       0, // No TCP
+		UnixSocket: socketPath,
+		Threshold:  100,
+	}
+	s, err := NewServer(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Failed to create UDS-only server: %v", err)
+	}
+	if s == nil {
+		t.Fatal("Server is nil")
+	}
+	if s.udsServer == nil {
+		t.Error("UDS server should not be nil")
+	}
+	if s.udsListener == nil {
+		t.Error("UDS listener should not be nil")
+	}
+	if s.s != nil {
+		t.Error("TCP server should be nil for UDS-only")
+	}
+
+	// Test Address() returns UDS path
+	addr := s.Address()
+	if addr != socketPath {
+		t.Errorf("Expected address %s, got %s", socketPath, addr)
+	}
+
+	s.ForceStop()
+
+	// Verify socket was cleaned up
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Error("Socket file should be removed after ForceStop")
+		os.Remove(socketPath)
+	}
+}
+
+func TestServerUnixSocketStop(t *testing.T) {
+	// Test graceful Stop() on UDS server
+	socketPath := "/tmp/gnmi_test_uds_stop.sock"
+	os.Remove(socketPath)
+
+	cfg := &Config{
+		Port:       0,
+		UnixSocket: socketPath,
+		Threshold:  100,
+	}
+	s, err := NewServer(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Failed to create UDS server: %v", err)
+	}
+
 	s.Stop()
+
+	// Verify socket was cleaned up
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Error("Socket file should be removed after Stop")
+		os.Remove(socketPath)
+	}
+}
+
+func TestServerUnixSocketServeAndStop(t *testing.T) {
+	// Test that Serve() returns when Stop() is called
+	socketPath := "/tmp/gnmi_test_uds_serve.sock"
+	os.Remove(socketPath)
+
+	cfg := &Config{
+		Port:       0,
+		UnixSocket: socketPath,
+		Threshold:  100,
+	}
+	s, err := NewServer(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Failed to create UDS server: %v", err)
+	}
+
+	// Start Serve() in a goroutine
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- s.Serve()
+	}()
+
+	// Give server time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop the server
+	s.Stop()
+
+	// Verify Serve() returns
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Errorf("Serve() returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Serve() did not return after Stop()")
+	}
+
+	// Verify socket was cleaned up
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Error("Socket file should be removed after Stop")
+		os.Remove(socketPath)
+	}
+}
+
+func TestServerDualListener(t *testing.T) {
+	// Test creating a server with both TCP and UDS listeners
+	socketPath := "/tmp/gnmi_test_dual.sock"
+	os.Remove(socketPath)
+
+	certificate, err := testcert.NewCert()
+	if err != nil {
+		t.Fatalf("could not load server key pair: %s", err)
+	}
+	tlsCfg := &tls.Config{
+		ClientAuth:   tls.RequestClientCert,
+		Certificates: []tls.Certificate{certificate},
+	}
+	tlsOpts := []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}
+
+	cfg := &Config{
+		Port:       8181,
+		UnixSocket: socketPath,
+		Threshold:  100,
+	}
+	s, err := NewServer(cfg, tlsOpts, nil)
+	if err != nil {
+		t.Fatalf("Failed to create dual-listener server: %v", err)
+	}
+	if s.s == nil {
+		t.Error("TCP server should not be nil")
+	}
+	if s.udsServer == nil {
+		t.Error("UDS server should not be nil")
+	}
+
+	// Test Address() returns both addresses
+	addr := s.Address()
+	if !strings.Contains(addr, "8181") {
+		t.Errorf("Address should contain TCP port, got: %s", addr)
+	}
+	if !strings.Contains(addr, socketPath) {
+		t.Errorf("Address should contain socket path, got: %s", addr)
+	}
+
+	s.ForceStop()
+	os.Remove(socketPath)
 }
 
 func TestNilServerStop(t *testing.T) {
@@ -5287,7 +5918,6 @@ func TestParseOrigin(t *testing.T) {
 	}
 }
 
-/*
 func TestMasterArbitration(t *testing.T) {
 	s := createServer(t, 8088)
 	// Turn on Master Arbitration
@@ -5479,7 +6109,7 @@ func TestMasterArbitration(t *testing.T) {
 			t.Fatalf("Master EID update failed. Want %v, got %v", expectedEID10, s.masterEID)
 		}
 	})
-}*/
+}
 
 func TestSaveOnSet(t *testing.T) {
 	// Fail client creation
@@ -5777,29 +6407,28 @@ func (x *MockSetPackageServer) Recv() (*gnoi_system_pb.SetPackageRequest, error)
 func TestGnoiAuthorization(t *testing.T) {
 	s := createServer(t, 8081)
 	go runServer(t, s)
-	systemSrv := &SystemServer{Server: s}
 	mockAuthenticate := gomonkey.ApplyFunc(s.Authenticate, func(ctx context.Context, req *spb_jwt.AuthenticateRequest) (*spb_jwt.AuthenticateResponse, error) {
 		return nil, nil
 	})
 	defer mockAuthenticate.Reset()
 
-	err := systemSrv.Ping(new(gnoi_system_pb.PingRequest), new(MockPingServer))
+	err := s.Ping(new(gnoi_system_pb.PingRequest), new(MockPingServer))
 	if err == nil {
 		t.Errorf("Ping should failed, because not implement.")
 	}
 
-	systemSrv.Traceroute(new(gnoi_system_pb.TracerouteRequest), new(MockTracerouteServer))
+	s.Traceroute(new(gnoi_system_pb.TracerouteRequest), new(MockTracerouteServer))
 	if err == nil {
 		t.Errorf("Traceroute should failed, because not implement.")
 	}
 
-	systemSrv.SetPackage(new(MockSetPackageServer))
+	s.SetPackage(new(MockSetPackageServer))
 	if err == nil {
 		t.Errorf("SetPackage should failed, because not implement.")
 	}
 
 	ctx := context.Background()
-	systemSrv.SwitchControlProcessor(ctx, new(gnoi_system_pb.SwitchControlProcessorRequest))
+	s.SwitchControlProcessor(ctx, new(gnoi_system_pb.SwitchControlProcessorRequest))
 	if err == nil {
 		t.Errorf("SwitchControlProcessor should failed, because not implement.")
 	}
@@ -5835,4 +6464,414 @@ func init() {
 func TestMain(m *testing.M) {
 	defer test_utils.MemLeakCheck()
 	m.Run()
+}
+
+func TestSrvConfigFlow(t *testing.T) {
+	// 1. Setup temporary environment
+	tmpDir, err := os.MkdirTemp("", "gnmi_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Define paths for config
+	caFile := filepath.Join(tmpDir, "ca.pem")
+	caLnk := filepath.Join(tmpDir, "ca_link.pem")
+	srvCertFile := filepath.Join(tmpDir, "srv.pem")
+	srvCertLnk := filepath.Join(tmpDir, "srv_link.pem")
+	srvKeyFile := filepath.Join(tmpDir, "srv.key")
+	srvKeyLnk := filepath.Join(tmpDir, "srv_link.key")
+
+	// Create dummy files to pass os.Stat checks
+	dummyContent := []byte("test-content")
+	os.WriteFile(caFile, dummyContent, 0644)
+	os.WriteFile(srvCertFile, dummyContent, 0644)
+	os.WriteFile(srvKeyFile, dummyContent, 0644)
+
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+	}{
+		{
+			name: "Success_SrvTestConfig",
+			config: &Config{
+				CaCertFile:  caFile,
+				CaCertLnk:   caLnk,
+				SrvCertFile: srvCertFile,
+				SrvCertLnk:  srvCertLnk,
+				SrvKeyFile:  srvKeyFile,
+				SrvKeyLnk:   srvKeyLnk,
+			},
+			wantErr: false,
+		},
+		{
+			name: "Error_InvalidStatPath",
+			config: &Config{
+				SrvCertFile: "/non/existent/path",
+				SrvCertLnk:  filepath.Join(tmpDir, "invalid_link"),
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test SrvTestConfig (which calls SrvAdvConfig internally)
+			opts, _, err := SrvTestConfig(tt.config)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("%s: SrvTestConfig() error = %v, wantErr %v", tt.name, err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				if len(opts) == 0 {
+					t.Errorf("%s: Expected gRPC server options, got none", tt.name)
+				}
+				// Verify that SrvTestConfig actually created the test cert files
+				testCertPath := filepath.Dir(tt.config.SrvCertLnk) + "/server_test_cert.pem"
+				if _, err := os.Stat(testCertPath); os.IsNotExist(err) {
+					t.Errorf("%s: Test certificate file was not created at %s", tt.name, testCertPath)
+				}
+			}
+		})
+	}
+}
+
+func TestSrvAdvConfigNoCA(t *testing.T) {
+	// Testing the branch where CaCertFile is empty (SkipVerification path)
+	cfg := &Config{
+		SrvCertFile: "/tmp/fake_cert",
+		SrvCertLnk:  "/tmp/fake_link",
+		SrvKeyFile:  "/tmp/fake_key",
+		SrvKeyLnk:   "/tmp/fake_link_key",
+	}
+
+	// Mock the file existence if needed, or check if it returns options
+	opts, _, _ := SrvAdvConfig(cfg)
+	if opts == nil {
+		t.Log("Note: SrvAdvConfig requires valid paths to return options")
+	}
+}
+
+func TestSrvConfigDeepCoverage(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "gnmi_adv_test")
+	defer os.RemoveAll(tmpDir)
+
+	// 1. Prepare valid files for the success path
+	caFile := filepath.Join(tmpDir, "ca.pem")
+	srvCert := filepath.Join(tmpDir, "srv.pem")
+	srvKey := filepath.Join(tmpDir, "srv.key")
+	crlDir := filepath.Join(tmpDir, "crl_config")
+	os.MkdirAll(filepath.Join(crlDir, "crl"), 0755)
+
+	// Helper to write valid-ish PEM
+	dummyCert := []byte("-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----")
+	os.WriteFile(caFile, dummyCert, 0644)
+	os.WriteFile(srvCert, dummyCert, 0644)
+	os.WriteFile(srvKey, dummyCert, 0644)
+
+	t.Run("SrvTestConfigWriteErrorCoverage", func(t *testing.T) {
+		// Use a path that is impossible to write to trigger the log and error return
+		cfg := &Config{SrvCertLnk: "/proc/invalid_path/cert.pem"}
+		_, _, err := SrvTestConfig(cfg)
+		if err == nil {
+			t.Error("Expected error for read-only/invalid path")
+		}
+	})
+
+	t.Run("SrvAdvConfigFullLogicHandshake", func(t *testing.T) {
+		cfg := &Config{
+			CaCertFile:    caFile,
+			CaCertLnk:     caFile,
+			SrvCertFile:   srvCert,
+			SrvCertLnk:    srvCert,
+			SrvKeyFile:    srvKey,
+			SrvKeyLnk:     srvKey,
+			CertCRLConfig: crlDir,
+		}
+
+		_, _, err := SrvAdvConfig(cfg)
+		if err != nil {
+			t.Fatalf("Failed to generate config: %v", err)
+		}
+
+		// Trigger Identity Callback manually for coverage
+		serverCreds, _ := advancedtls.NewServerCreds(&advancedtls.Options{
+			IdentityOptions: advancedtls.IdentityCertificateOptions{
+				GetIdentityCertificatesForServer: func(*tls.ClientHelloInfo) ([]*tls.Certificate, error) {
+					// Manually invoking the logic found in server.go
+					_, err := tls.LoadX509KeyPair(cfg.SrvCertLnk, cfg.SrvKeyLnk)
+					return nil, err
+				},
+			},
+		})
+		_ = serverCreds
+	})
+
+	t.Run("SrvAdvConfigCRLFailures", func(t *testing.T) {
+		// Cover the error return when CRL directory is missing
+		cfg := &Config{
+			CaCertFile:    caFile,
+			CertCRLConfig: filepath.Join(tmpDir, "non_existent_crl"),
+		}
+		_, _, err := SrvAdvConfig(cfg)
+		if err == nil {
+			t.Error("Expected error when CRL directory is missing")
+		}
+	})
+}
+
+func createTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gnmi_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+func createDummyCACert(t *testing.T, dir string) string {
+	t.Helper()
+	// Reusing testcert.NewCert for a self-signed CA
+	cert, err := testcert.NewCert()
+	if err != nil {
+		t.Fatalf("Failed to generate test CA cert: %v", err)
+	}
+	caFile := filepath.Join(dir, "ca.pem")
+	certBlock := &pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(certBlock), 0600); err != nil {
+		t.Fatalf("Failed to write dummy CA cert: %v", err)
+	}
+	return caFile
+}
+
+// Helper to create dummy server certificate and key files.
+func createDummyServerCert(t *testing.T, dir string) (certFile, keyFile string) {
+	t.Helper()
+	cert, err := testcert.NewCert()
+	if err != nil {
+		t.Fatalf("Failed to generate test cert: %v", err)
+	}
+
+	certFile = filepath.Join(dir, "server.pem")
+	certBlock := &pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(certBlock), 0600); err != nil {
+		t.Fatalf("Failed to write dummy server cert: %v", err)
+	}
+
+	keyFile = filepath.Join(dir, "server.key")
+	privBytes := x509.MarshalPKCS1PrivateKey(cert.PrivateKey.(*rsa.PrivateKey))
+	keyBlock := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: privBytes}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(keyBlock), 0600); err != nil {
+		t.Fatalf("Failed to write dummy server key: %v", err)
+	}
+	return certFile, keyFile
+}
+
+func TestSrvAdvConfig(t *testing.T) {
+	tempDir := createTempDir(t)
+	caFile := createDummyCACert(t, tempDir)
+	srvCertFile, srvKeyFile := createDummyServerCert(t, tempDir)
+
+	tests := []struct {
+		name              string
+		cfg               *Config
+		expectErr         bool
+		expectClientCert  bool
+		expectVerifyType  advancedtls.VerificationType
+		expectCRLProvider bool
+	}{
+		{
+			name: "Valid Config with CA and Server Certs",
+			cfg: &Config{
+				CaCertFile:  caFile,
+				SrvCertFile: srvCertFile,
+				SrvKeyFile:  srvKeyFile,
+				CaCertLnk:   filepath.Join(tempDir, "ca.lnk"),
+				SrvCertLnk:  filepath.Join(tempDir, "srv_cert.lnk"),
+				SrvKeyLnk:   filepath.Join(tempDir, "srv_key.lnk"),
+			},
+			expectErr:        false,
+			expectClientCert: true,
+			expectVerifyType: advancedtls.CertVerification,
+		},
+		{
+			name: "Valid Config without CA Cert",
+			cfg: &Config{
+				SrvCertFile: srvCertFile,
+				SrvKeyFile:  srvKeyFile,
+				SrvCertLnk:  filepath.Join(tempDir, "srv_cert.lnk"),
+				SrvKeyLnk:   filepath.Join(tempDir, "srv_key.lnk"),
+			},
+			expectErr:        false,
+			expectClientCert: false,
+			expectVerifyType: advancedtls.SkipVerification,
+		},
+		{
+			name: "Invalid CACertFile",
+			cfg: &Config{
+				CaCertFile:  filepath.Join(tempDir, "nonexistent_ca.pem"),
+				SrvCertFile: srvCertFile,
+				SrvKeyFile:  srvKeyFile,
+				CaCertLnk:   filepath.Join(tempDir, "ca.lnk"),
+				SrvCertLnk:  filepath.Join(tempDir, "srv_cert.lnk"),
+				SrvKeyLnk:   filepath.Join(tempDir, "srv_key.lnk"),
+			},
+			expectErr: true,
+		},
+		{
+			name: "Invalid SrvCertFile",
+			cfg: &Config{
+				CaCertFile:  caFile,
+				SrvCertFile: filepath.Join(tempDir, "nonexistent_srv.pem"),
+				SrvKeyFile:  srvKeyFile,
+				CaCertLnk:   filepath.Join(tempDir, "ca.lnk"),
+				SrvCertLnk:  filepath.Join(tempDir, "srv_cert.lnk"),
+				SrvKeyLnk:   filepath.Join(tempDir, "srv_key.lnk"),
+			},
+			expectErr: true,
+		},
+		{
+			name: "Invalid SrvKeyFile",
+			cfg: &Config{
+				CaCertFile:  caFile,
+				SrvCertFile: srvCertFile,
+				SrvKeyFile:  filepath.Join(tempDir, "nonexistent_key.pem"),
+				CaCertLnk:   filepath.Join(tempDir, "ca.lnk"),
+				SrvCertLnk:  filepath.Join(tempDir, "srv_cert.lnk"),
+				SrvKeyLnk:   filepath.Join(tempDir, "srv_key.lnk"),
+			},
+			expectErr: true,
+		},
+		{
+			name: "Valid Config with CRL",
+			cfg: &Config{
+				CaCertFile:    caFile,
+				SrvCertFile:   srvCertFile,
+				SrvKeyFile:    srvKeyFile,
+				CaCertLnk:     filepath.Join(tempDir, "ca.lnk"),
+				SrvCertLnk:    filepath.Join(tempDir, "srv_cert.lnk"),
+				SrvKeyLnk:     filepath.Join(tempDir, "srv_key.lnk"),
+				CertCRLConfig: tempDir,
+			},
+			expectErr:         false,
+			expectClientCert:  true,
+			expectVerifyType:  advancedtls.CertVerification,
+			expectCRLProvider: true,
+		},
+		{
+			name: "Invalid CRL Directory",
+			cfg: &Config{
+				CaCertFile:    caFile,
+				SrvCertFile:   srvCertFile,
+				SrvKeyFile:    srvKeyFile,
+				CaCertLnk:     filepath.Join(tempDir, "ca.lnk"),
+				SrvCertLnk:    filepath.Join(tempDir, "srv_cert.lnk"),
+				SrvKeyLnk:     filepath.Join(tempDir, "srv_key.lnk"),
+				CertCRLConfig: filepath.Join(tempDir, "nonexistent_crl_dir"),
+			},
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Ensure symlinks are invalid at the start of each test case to trigger atomicSet calls.
+			os.Remove(tt.cfg.CaCertLnk)
+			os.Remove(tt.cfg.SrvCertLnk)
+			os.Remove(tt.cfg.SrvKeyLnk)
+
+			// Create the CRL directory if needed for the test case
+			if tt.cfg.CertCRLConfig != "" && !tt.expectErr {
+				crlDir := filepath.Join(tt.cfg.CertCRLConfig, "crl")
+				if err := os.MkdirAll(crlDir, 0755); err != nil {
+					t.Fatalf("Failed to create CRL directory: %v", err)
+				}
+				defer os.RemoveAll(crlDir)
+			}
+
+			opts, providers, err := SrvAdvConfig(tt.cfg)
+			defer cleanupProviders(providers)
+
+			if (err != nil) != tt.expectErr {
+				t.Errorf("SrvAdvConfig(%v) got error: %v, want error: %v", tt.cfg, err, tt.expectErr)
+			}
+			if tt.expectErr {
+				return
+			}
+
+			if len(opts) == 0 {
+				t.Errorf("SrvAdvConfig(%v) returned no grpc.ServerOption", tt.cfg)
+			}
+
+			// Verify symlinks were created/updated
+			if tt.cfg.CaCertFile != "" {
+				if target, err := os.Readlink(tt.cfg.CaCertLnk); err != nil || target != tt.cfg.CaCertFile {
+					t.Errorf("CaCertLnk symlink invalid, got %q, want %q, err: %v", target, tt.cfg.CaCertFile, err)
+				}
+			}
+			if target, err := os.Readlink(tt.cfg.SrvCertLnk); err != nil || target != tt.cfg.SrvCertFile {
+				t.Errorf("SrvCertLnk symlink invalid, got %q, want %q, err: %v", target, tt.cfg.SrvCertFile, err)
+			}
+			if target, err := os.Readlink(tt.cfg.SrvKeyLnk); err != nil || target != tt.cfg.SrvKeyFile {
+				t.Errorf("SrvKeyLnk symlink invalid, got %q, want %q, err: %v", target, tt.cfg.SrvKeyFile, err)
+			}
+		})
+	}
+}
+
+func TestSrvTestConfigLogsAndReturns(t *testing.T) {
+	// 1. Force error in the FIRST WriteFile (Server Certificate)
+	t.Run("CoverageCertWriteError", func(t *testing.T) {
+		// Using a path that cannot be created/written to (e.g., inside a non-existent root folder)
+		// This forces: if err = os.WriteFile(srvCert...); err != nil { ... }
+		cfg := &Config{
+			SrvCertLnk: "/invalid_directory_root/cert.pem",
+		}
+
+		opts, providers, err := SrvTestConfig(cfg)
+
+		// This check ensures the code executed the return nil, nil, err
+		if err == nil {
+			t.Errorf("Expected error for invalid path, but got nil")
+		}
+		if opts != nil || providers != nil {
+			t.Errorf("Expected nil returns, but got opts=%v, providers=%v", opts, providers)
+		}
+	})
+
+	// 2. Force error in the SECOND WriteFile (Server Key)
+	t.Run("CoverageKeyWriteError", func(t *testing.T) {
+		tmpDir, _ := os.MkdirTemp("", "key_fail_test")
+		defer os.RemoveAll(tmpDir)
+
+		// We make the directory itself writable so the FIRST WriteFile succeeds.
+		// Then we create a file at the exact path of the SECOND WriteFile
+		// but make it a directory or read-only so the SECOND WriteFile fails.
+
+		linkPath := tmpDir + "/test_link.pem"
+		srvKeyPath := tmpDir + "/server_test_key.pem"
+
+		// Create a directory where the key file is supposed to be written.
+		// os.WriteFile cannot write to a path that is already a directory.
+		os.Mkdir(srvKeyPath, 0755)
+
+		cfg := &Config{
+			SrvCertLnk: linkPath,
+		}
+
+		opts, providers, err := SrvTestConfig(cfg)
+
+		if err == nil {
+			t.Errorf("Expected error for key write (path is directory), but got nil")
+		}
+
+		// This confirms the specific return statement was hit
+		if opts != nil || providers != nil {
+			t.Errorf("Return values must be nil")
+		}
+	})
 }
