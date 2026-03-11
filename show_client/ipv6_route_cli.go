@@ -42,11 +42,11 @@ func getIPv6Route(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 		return nil, err
 	}
 
-	// Validate & compact JSON: unmarshal then directly marshal
-	var parsed interface{}
-	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+	// Validate & compact JSON
+	var raw json.RawMessage
+	if err := json.Unmarshal([]byte(output), &raw); err != nil {
 		log.Errorf("Invalid JSON from vtysh command '%s': %v", vtyshIPv6RouteCmd, err)
 		return nil, err
 	}
-	return json.Marshal(parsed)
+	return json.Marshal(raw)
 }
