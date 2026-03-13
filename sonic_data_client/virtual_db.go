@@ -204,27 +204,6 @@ func GetCountersQueueTypeMap() (map[string]string, error) {
 	return countersQueueTypeMap, nil
 }
 
-func initCountersPGNameMap() error {
-	if len(countersPGNameMap) == 0 {
-		pgOidMap, err := getCountersMap("COUNTERS_PG_NAME_MAP")
-		if err != nil {
-			return err
-		}
-		for pg, oid := range pgOidMap {
-			// pg is in format of "Ethernet64:7"
-			pg_parts := strings.Split(pg, ":")
-			if len(pg_parts) != 2 {
-				return fmt.Errorf("invalid pg name %v", pg)
-			}
-			if _, ok := countersPGNameMap[pg_parts[0]]; !ok {
-				countersPGNameMap[pg_parts[0]] = make(map[string]string)
-			}
-			countersPGNameMap[pg_parts[0]][pg_parts[1]] = oid
-		}
-	}
-	return nil
-}
-
 func initCountersPortNameMap() error {
 	var initErr error
 	initCountersPortNameMapOnce.Do(func() {
@@ -261,30 +240,6 @@ func initCountersAclRuleMap() error {
 		}
 	})
 	return initErr
-}
-
-func initCountersSidMap() error {
-	var err error
-	if len(countersSidMap) == 0 {
-		countersSidMap, err = getCountersMap("COUNTERS_SRV6_NAME_MAP")
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func initCountersAclRuleMap() error {
-	var err error
-	if len(countersAclRuleMap) == 0 {
-		// ACL_COUNTER_RULE_MAP is a hash in COUNTERS_DB:
-		//   "DATAACL:RULE_1" -> "oid:0x9000000000711"
-		countersAclRuleMap, err = getCountersMap("ACL_COUNTER_RULE_MAP")
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func initAliasMap() error {
