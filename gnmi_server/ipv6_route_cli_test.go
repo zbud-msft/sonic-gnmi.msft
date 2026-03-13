@@ -11,9 +11,9 @@ import (
 
 	pb "github.com/openconfig/gnmi/proto/gnmi"
 
+	"context"
 	"github.com/agiledragon/gomonkey/v2"
 	sccommon "github.com/sonic-net/sonic-gnmi/show_client/common"
-	"context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"

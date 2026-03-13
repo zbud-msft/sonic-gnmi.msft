@@ -21,8 +21,8 @@ import (
 	"encoding/json"
 
 	log "github.com/golang/glog"
-	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
 	"github.com/sonic-net/sonic-gnmi/show_client/common"
+	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

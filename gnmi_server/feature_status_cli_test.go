@@ -114,7 +114,6 @@ func TestGetShowFeatureStatus(t *testing.T) {
 			testInit: func() {
 			},
 		},
-
 	}
 
 	for _, test := range tests {

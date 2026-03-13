@@ -112,7 +112,6 @@ func TestGetShowFeatureAutoRestart(t *testing.T) {
 			testInit: func() {
 			},
 		},
-
 	}
 
 	for _, test := range tests {

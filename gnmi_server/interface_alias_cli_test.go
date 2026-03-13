@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	"github.com/agiledragon/gomonkey/v2"
 	pb "github.com/openconfig/gnmi/proto/gnmi"
-	"context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"

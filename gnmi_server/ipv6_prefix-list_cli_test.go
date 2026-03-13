@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/openconfig/gnmi/proto/gnmi"
 	"context"
+	pb "github.com/openconfig/gnmi/proto/gnmi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -53,7 +53,7 @@ func TestGetIPv6PrefixList(t *testing.T) {
 	}
 
 	// expected empty response
-	emptyExpected, err := json.Marshal(map[string]interface {}{})
+	emptyExpected, err := json.Marshal(map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("Failed to marshal expected empty result, error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestGetIPv6PrefixList(t *testing.T) {
 				elem: <name: "prefix-list" >
 			`,
 			wantRetCode: codes.OK,
-			wantRespVal:    []byte(singleExpectedResponse),
+			wantRespVal: []byte(singleExpectedResponse),
 			valTest:     true,
 			mockFile:    "../testdata/VTYSH_SHOW_IPV6_PREFIX-LIST_SINGLE.txt",
 		},
@@ -87,7 +87,7 @@ func TestGetIPv6PrefixList(t *testing.T) {
 				elem: <name: "prefix-list" >
 			`,
 			wantRetCode: codes.OK,
-			wantRespVal:    []byte(multiExpectedResponse),
+			wantRespVal: []byte(multiExpectedResponse),
 			valTest:     true,
 			mockFile:    "../testdata/VTYSH_SHOW_IPV6_PREFIX-LIST_MULTI_IN_ONE.txt",
 		},
@@ -100,7 +100,7 @@ func TestGetIPv6PrefixList(t *testing.T) {
 				elem: <name: "prefix-list" >
 			`,
 			wantRetCode: codes.OK,
-			wantRespVal:    []byte(multiExpectedResponse),
+			wantRespVal: []byte(multiExpectedResponse),
 			valTest:     true,
 			mockFile:    "../testdata/VTYSH_SHOW_IPV6_PREFIX-LIST_MULTI.txt",
 		},
@@ -113,7 +113,7 @@ func TestGetIPv6PrefixList(t *testing.T) {
 				elem: <name: "DEFAULT_IPV6" >
 			`,
 			wantRetCode: codes.OK,
-			wantRespVal:    []byte(filteredMultiExpectedResponse),
+			wantRespVal: []byte(filteredMultiExpectedResponse),
 			valTest:     true,
 			mockFile:    "../testdata/VTYSH_SHOW_IPV6_PREFIX-LIST_MULTI.txt",
 		},
@@ -137,7 +137,7 @@ func TestGetIPv6PrefixList(t *testing.T) {
 				elem: <name: "NON_EXISTENT" >
 			`,
 			wantRetCode: codes.OK,
-			wantRespVal:    []byte(emptyExpected),
+			wantRespVal: []byte(emptyExpected),
 			valTest:     true,
 			mockFile:    "../testdata/VTYSH_SHOW_IPV6_PREFIX-LIST_MULTI.txt",
 		},
@@ -149,7 +149,7 @@ func TestGetIPv6PrefixList(t *testing.T) {
 				elem: <name: "prefix-list" >
 			`,
 			wantRetCode: codes.OK,
-			wantRespVal:    []byte(emptyExpected),
+			wantRespVal: []byte(emptyExpected),
 			valTest:     true,
 			mockFile:    "../testdata/VTYSH_SHOW_EMPTY.txt",
 		},

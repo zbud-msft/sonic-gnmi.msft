@@ -943,8 +943,8 @@ func init() {
 		1,
 		nil,
 		showCmdOptionVerbose,
-  )
-  
+	)
+
 	// SHOW/platform/summary
 	sdc.RegisterCliPath(
 		[]string{"SHOW", "platform", "summary"},

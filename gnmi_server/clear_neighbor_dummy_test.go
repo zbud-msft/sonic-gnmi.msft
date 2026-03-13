@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	spb_gnoi "github.com/sonic-net/sonic-gnmi/proto/gnoi"
 	"context"
+	spb_gnoi "github.com/sonic-net/sonic-gnmi/proto/gnoi"
 )
 
 func TestDummyClearNeighbor(t *testing.T) {

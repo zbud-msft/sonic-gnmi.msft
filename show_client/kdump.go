@@ -31,7 +31,7 @@ func getKdumpConfigData(fieldName string) string {
 
 func getKdumpOperMode() string {
 	operMode := "Not Ready"
-	
+
 	output, err := common.GetDataFromHostCommand(KDUMP_CONFIG_STATUS_CMD)
 	if err != nil {
 		log.V(2).Infof("Failed to get kdump operational mode: %v", err)
@@ -188,7 +188,7 @@ func getKdumpLogging(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 		}
 		timestamp := parts[len(parts)-1]
 		filePath = "/var/crash/" + timestamp + "/" + filename
-		
+
 		// checking if file exists
 		checkCmd := "test -f " + filePath
 		_, err := common.GetDataFromHostCommand(checkCmd)
@@ -227,7 +227,7 @@ func getKdumpLogging(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	}
 
 	logData := map[string]interface{}{
-		"logs":  logLines,
+		"logs": logLines,
 	}
 
 	return json.Marshal(logData)

@@ -86,7 +86,7 @@ func TestGetShowKdumpConfig(t *testing.T) {
 	kdumpConfigExpectedDisabled := `{"administrative_mode":"Disabled","max_dump_files":"3","memory_reservation":"64M","operational_mode":"Not Ready","ssh_connection_string":"connection_string not found","ssh_private_key_path":"ssh_key not found"}`
 	kdumpConfigExpectedWithSSH := `{"administrative_mode":"Enabled","max_dump_files":"3","memory_reservation":"64M","operational_mode":"Ready after reboot","ssh_connection_string":"user@remote.host:/path","ssh_private_key_path":"/etc/kdump/ssh_key"}`
 	kdumpConfigExpectedEmpty := `{"administrative_mode":"Disabled","max_dump_files":"Unknown","memory_reservation":"Unknown","operational_mode":"Not Ready","ssh_connection_string":"connection_string not found","ssh_private_key_path":"ssh_key not found"}`
-	
+
 	kdumpConfigDbDataEnabledFilename := "../testdata/KDUMP_CONFIG_DB_DATA_ENABLED.txt"
 	kdumpConfigDbDataDisabledFilename := "../testdata/KDUMP_CONFIG_DB_DATA_DISABLED.txt"
 	kdumpConfigDbDataWithSSHFilename := "../testdata/KDUMP_CONFIG_DB_DATA_SSH.txt"

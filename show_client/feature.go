@@ -240,4 +240,3 @@ func getFeatureAutoRestart(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, err
 
 	return json.Marshal(response)
 }
-

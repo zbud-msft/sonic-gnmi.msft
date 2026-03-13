@@ -116,7 +116,7 @@ func readSessionsInfo() (map[string]map[string]interface{}, error) {
 		// When querying a specific key, GetMapFromQueries may return data directly or wrapped with session name
 		var stateMap map[string]interface{}
 		var hasStateData bool
-		
+
 		// Check if result has session name as key
 		if stateData, exists := stateResult[sessionName]; exists {
 			if sm, ok := stateData.(map[string]interface{}); ok {

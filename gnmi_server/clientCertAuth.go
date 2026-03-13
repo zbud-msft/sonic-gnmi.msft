@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"context"
 	"github.com/golang/glog"
 	"github.com/sonic-net/sonic-gnmi/common_utils"
 	"github.com/sonic-net/sonic-gnmi/swsscommon"
-	"context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"

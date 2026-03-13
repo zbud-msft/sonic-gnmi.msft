@@ -165,7 +165,7 @@ func convertSfpInfoToOutputString(sfpInfoDict map[string]interface{}, sfpFirmwar
 
 				specComplianceDict := make(map[string]interface{})
 				specStr, ok := sfpInfoDict["specification_compliance"]
-        
+
 				if ok && specStr != "" {
 					if s, ok := specStr.(string); ok && s != "" {
 						if err := json.Unmarshal([]byte(s), &specComplianceDict); err != nil {

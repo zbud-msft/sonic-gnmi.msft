@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/openconfig/gnmi/proto/gnmi"
 	"context"
+	pb "github.com/openconfig/gnmi/proto/gnmi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -46,7 +46,7 @@ func TestShowInterfaceTransceiverLpMode(t *testing.T) {
 		valTest     bool
 	}{
 		{
-			desc:     "all ports",
+			desc: "all ports",
 			path: `
 				elem: <name: "interfaces" >
 				elem: <name: "transceiver" >
@@ -58,7 +58,7 @@ func TestShowInterfaceTransceiverLpMode(t *testing.T) {
 			valTest:     true,
 		},
 		{
-			desc:     "single existing port",
+			desc: "single existing port",
 			path: `
 				elem: <name: "interfaces" >
 				elem: <name: "transceiver" >

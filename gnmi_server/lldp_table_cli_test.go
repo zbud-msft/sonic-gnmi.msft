@@ -11,12 +11,12 @@ import (
 
 	pb "github.com/openconfig/gnmi/proto/gnmi"
 
-	"github.com/agiledragon/gomonkey/v2"
 	"context"
+	"github.com/agiledragon/gomonkey/v2"
+	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
 )
 
 func TestGetLLDPTable(t *testing.T) {
@@ -148,7 +148,7 @@ func TestGetLLDPTable(t *testing.T) {
 		var patchesSlice []*gomonkey.Patches
 		patchesSlice = append(patchesSlice, gomonkey.ApplyFunc(sdc.PortToAliasNameMap, func() map[string]string {
 			return map[string]string{
-				"eth0": "etp0",
+				"eth0":        "etp0",
 				"Ethernet353": "etp353",
 				"Ethernet354": "etp354",
 				"Ethernet355": "etp355",
