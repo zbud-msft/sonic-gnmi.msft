@@ -32,7 +32,7 @@ require (
 	golang.org/x/sys v0.33.0
 	google.golang.org/grpc v1.69.2
 	google.golang.org/grpc/security/advancedtls v1.0.0
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.2.8
 	gopkg.in/yaml.v3 v3.0.1
 	mvdan.cc/sh/v3 v3.8.0
@@ -47,7 +47,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
-	github.com/go-redis/redis/v7 v7.0.0-beta.3.0.20190824101152-d19aba07b476 // indirect
+	github.com/go-redis/redis/v7 v7.4.1 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
@@ -79,3 +79,5 @@ replace (
 	google.golang.org/grpc => google.golang.org/grpc v1.64.1
 	google.golang.org/protobuf => google.golang.org/protobuf v1.34.1
 )
+
+replace golang.org/x/sync => golang.org/x/sync v0.6.0
