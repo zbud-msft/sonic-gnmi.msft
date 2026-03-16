@@ -106,7 +106,7 @@ func createDpuStateRowsFromData(moduleName string, stateInfo map[string]interfac
 	return rows
 }
 
-func getSystemHealthDpu(options sdc.OptionMap) ([]byte, error) {
+func getSystemHealthDpu(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	log.V(2).Infof("getSystemHealthDpu: called with options: %v", getOptionsKeys(options))
 
 	// Get module name from options
