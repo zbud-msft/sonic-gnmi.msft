@@ -467,7 +467,7 @@ sonic_utilities: 1.2
 				MockReadFile(show_client.SonicVersionYamlPath, versionInfo, nil)
 				MockEnvironmentVariable(t, "PLATFORM", "")
 				AddDataSet(t, ConfigDbNum, deviceMetadataFilename)
-				AddDataSet(t, chassisStateDbNum, chassisDataFilename)
+				AddDataSet(t, ChassisStateDbNum, chassisDataFilename)
 			},
 		},
 	}
@@ -1298,7 +1298,7 @@ sonic_utilities: 1.2
 				MockReadFile(show_client.SonicVersionYamlPath, versionInfo, nil)
 				MockEnvironmentVariable(t, "PLATFORM", "dummy_platform")
 				AddDataSet(t, ConfigDbNum, deviceMetadataFilename)
-				AddDataSet(t, chassisStateDbNum, chassisDataFilename)
+				AddDataSet(t, ChassisStateDbNum, chassisDataFilename)
 			},
 		},
 		{
@@ -1316,7 +1316,7 @@ sonic_utilities: 1.2
 			testInit: func() {
 				MockReadFile(show_client.SonicVersionYamlPath, versionInfo, errors.New("test error."))
 				AddDataSet(t, ConfigDbNum, deviceMetadataFilename)
-				AddDataSet(t, chassisStateDbNum, chassisDataFilename)
+				AddDataSet(t, ChassisStateDbNum, chassisDataFilename)
 			},
 		},
 		{
@@ -1337,7 +1337,7 @@ sonic_utilities: 1.2
 				MockReadFile(show_client.SonicVersionYamlPath, versionInfo, nil)
 				MockEnvironmentVariable(t, "PLATFORM", "dummy_platform")
 				AddDataSet(t, ConfigDbNum, deviceMetadataFilename)
-				AddDataSet(t, chassisStateDbNum, chassisDataFilename)
+				AddDataSet(t, ChassisStateDbNum, chassisDataFilename)
 			},
 		},
 		{

@@ -421,7 +421,7 @@ func TestPFCWDErrors(t *testing.T) {
 // runTestGet requests a path from the server by Get grpc call, and compares if
 // the return code and response value are expected.
 func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTarget string,
-	textPbPath string, wantRetCode codes.Code, wantRespVal interface{}, valTest bool) {
+	textPbPath string, wantRetCode codes.Code, wantRespVal interface{}, valTest bool, ignoreValOrder ...bool) {
 	//var retCodeOk bool
 	// Send request
 	t.Helper()
@@ -482,7 +482,35 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 			}
 		}
 
-		if !reflect.DeepEqual(gotVal, wantRespVal) {
+		shouldIgnoreOrder := len(ignoreValOrder) > 0 && ignoreValOrder[0]
+		if shouldIgnoreOrder {
+			if gotArr, ok := gotVal.([]interface{}); ok {
+				if wantArr, ok := wantRespVal.([]interface{}); ok {
+					if len(gotArr) != len(wantArr) {
+						t.Errorf("got %d elements, want %d elements", len(gotArr), len(wantArr))
+					} else {
+						for _, w := range wantArr {
+							found := false
+							for _, g := range gotArr {
+								if reflect.DeepEqual(g, w) {
+									found = true
+									break
+								}
+							}
+							if !found {
+								t.Errorf("missing expected element: %v", w)
+							}
+						}
+					}
+				} else {
+					t.Errorf("ignoreValOrder set but wantRespVal is not an array")
+				}
+			} else {
+				if !reflect.DeepEqual(gotVal, wantRespVal) {
+					t.Errorf("got: %v (%T),\nwant %v (%T)", gotVal, gotVal, wantRespVal, wantRespVal)
+				}
+			}
+		} else if !reflect.DeepEqual(gotVal, wantRespVal) {
 			t.Errorf("got: %v (%T),\nwant %v (%T)", gotVal, gotVal, wantRespVal, wantRespVal)
 		}
 	}

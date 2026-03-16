@@ -23,7 +23,7 @@ const (
 
 	TargetAddr        = "127.0.0.1:8081"
 	QueryTimeout      = 10
-	chassisStateDbNum = 13
+	ChassisStateDbNum = 13
 )
 
 func MockNSEnterOutput(t *testing.T, fileName string) *gomonkey.Patches {
