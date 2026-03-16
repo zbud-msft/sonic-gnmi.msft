@@ -605,8 +605,6 @@ func getSwitchStatMap(tableName string) (map[string]string, error) {
 // Populate real data paths from paths like
 // [COUNTER_DB COUNTERS PORT*] or [COUNTER_DB COUNTERS PORT0]
 func v2rSwitchPacketIntegrityDrop(paths []string) ([]tablePath, error) {
-	clearMappingsMu.RLock()
-	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // All Ethernet ports
 		for port, oid := range countersDebugNameSwitchStatMap {
@@ -942,8 +940,6 @@ func v2rEthPortQueStats(paths []string) ([]tablePath, error) {
 // Populate real data paths from paths like
 // [COUNTERS_DB COUNTERS SID*] or [COUNTERS_DB COUNTERS SID:fcbb:bbbb:1::/48]
 func v2rSRv6SidStats(paths []string) ([]tablePath, error) {
-	clearMappingsMu.RLock()
-	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // All SID Counters
 		for sid, oid := range countersSidMap {
@@ -1229,8 +1225,6 @@ func InitCountersFabricPortNameMap() error { return initCountersFabricPortNameMa
 // [COUNTERS_DB PERIODIC_WATERMARKS Ethernet* PriorityGroups] or
 // [COUNTERS_DB PERIODIC_WATERMARKS Ethernet64 PriorityGroups]
 func v2rEthPortPGPeriodicWMs(paths []string) ([]tablePath, error) {
-	clearMappingsMu.RLock()
-	defer clearMappingsMu.RUnlock()
 	// paths[DbIdx] = "COUNTERS_DB"
 	separator, _ := GetTableKeySeparator(paths[DbIdx], "")
 	var tblPaths []tablePath
