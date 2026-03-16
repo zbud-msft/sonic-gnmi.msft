@@ -72,6 +72,9 @@ var (
 	initCountersPfcwdNameMapOnce      sync.Once
 	initCountersFabricPortNameMapOnce sync.Once
 
+	// Mutex to protect ClearMappings from racing with init functions
+	clearMappingsMu sync.RWMutex
+
 	// SONiC Switch ID to Switch Stat packet integrity drop counters
 	countersDebugNameSwitchStatMap = make(map[string]string)
 
@@ -142,6 +145,8 @@ func (t *Trie) v2rTriePopulate() {
 }
 
 func initCountersQueueNameMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initCountersQueueNameMapOnce.Do(func() {
 		var err error
@@ -154,6 +159,8 @@ func initCountersQueueNameMap() error {
 }
 
 func initCountersPGNameMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initCountersPGNameMapOnce.Do(func() {
 		pgOidMap, err := GetCountersMap("COUNTERS_PG_NAME_MAP")
@@ -205,6 +212,8 @@ func GetCountersQueueTypeMap() (map[string]string, error) {
 }
 
 func initCountersPortNameMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initCountersPortNameMapOnce.Do(func() {
 		var err error
@@ -217,6 +226,8 @@ func initCountersPortNameMap() error {
 }
 
 func initCountersSidMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initCountersSidMapOnce.Do(func() {
 		var err error
@@ -229,6 +240,8 @@ func initCountersSidMap() error {
 }
 
 func initCountersAclRuleMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initCountersAclRuleMapOnce.Do(func() {
 		var err error
@@ -243,6 +256,8 @@ func initCountersAclRuleMap() error {
 }
 
 func initAliasMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initAliasMapOnce.Do(func() {
 		var err error
@@ -255,6 +270,8 @@ func initAliasMap() error {
 }
 
 func initCountersPfcwdNameMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initCountersPfcwdNameMapOnce.Do(func() {
 		var err error
@@ -267,6 +284,8 @@ func initCountersPfcwdNameMap() error {
 }
 
 func initCountersFabricPortNameMap() error {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var initErr error
 	initCountersFabricPortNameMapOnce.Do(func() {
 		var err error
@@ -1126,6 +1145,9 @@ func ClearMappings() {
 	if value != "1" {
 		return
 	}
+	clearMappingsMu.Lock()
+	defer clearMappingsMu.Unlock()
+
 	counterMaps := []map[string]string{
 		countersPortNameMap,
 		alias2nameMap,
