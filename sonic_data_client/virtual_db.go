@@ -521,6 +521,8 @@ func GetFabricCountersMap(tableName string) (map[string]string, error) {
 // Populate real data paths from paths like
 // [COUNTER_DB COUNTERS PORT*] or [COUNTER_DB COUNTERS PORT0]
 func v2rFabricPortStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // All Ethernet ports
 		for port, oid := range countersFabricPortNameMap {
@@ -603,6 +605,8 @@ func getSwitchStatMap(tableName string) (map[string]string, error) {
 // Populate real data paths from paths like
 // [COUNTER_DB COUNTERS PORT*] or [COUNTER_DB COUNTERS PORT0]
 func v2rSwitchPacketIntegrityDrop(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // All Ethernet ports
 		for port, oid := range countersDebugNameSwitchStatMap {
@@ -653,6 +657,8 @@ func v2rSwitchPacketIntegrityDrop(paths []string) ([]tablePath, error) {
 // Populate real data paths from paths like
 // [COUNTER_DB COUNTERS Ethernet*] or [COUNTER_DB COUNTERS Ethernet68]
 func v2rEthPortStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // All Ethernet ports
 		for port, oid := range countersPortNameMap {
@@ -717,6 +723,8 @@ func v2rEthPortStats(paths []string) ([]tablePath, error) {
 //
 // case of "*" field could be covered in v2rEthPortStats()
 func v2rEthPortFieldStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") {
 		for port, oid := range countersPortNameMap {
@@ -776,6 +784,8 @@ func v2rEthPortFieldStats(paths []string) ([]tablePath, error) {
 // Populate real data paths from paths like
 // [COUNTER_DB COUNTERS Ethernet* Pfcwd] or [COUNTER_DB COUNTERS Ethernet68 Pfcwd]
 func v2rEthPortPfcwdStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // Pfcwd on all Ethernet ports
 		for port, pfcqueues := range countersPfcwdNameMap {
@@ -861,6 +871,8 @@ func buildTablePath(namespace, dbName, tableName, tableKey, separator, field, js
 // Populate real data paths from paths like
 // [COUNTERS_DB COUNTERS Ethernet* Queues] or [COUNTERS_DB COUNTERS Ethernet68 Queues]
 func v2rEthPortQueStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	// paths[DbIdx] = "COUNTERS_DB"
 	separator, _ := GetTableKeySeparator(paths[DbIdx], "")
 	field := "SAI_QUEUE_STAT_SHARED_WATERMARK_BYTES"
@@ -930,6 +942,8 @@ func v2rEthPortQueStats(paths []string) ([]tablePath, error) {
 // Populate real data paths from paths like
 // [COUNTERS_DB COUNTERS SID*] or [COUNTERS_DB COUNTERS SID:fcbb:bbbb:1::/48]
 func v2rSRv6SidStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // All SID Counters
 		for sid, oid := range countersSidMap {
@@ -974,6 +988,8 @@ func v2rSRv6SidStats(paths []string) ([]tablePath, error) {
 // [COUNTERS_DB COUNTERS ACL_RULE*] or
 // [COUNTERS_DB COUNTERS ACL_RULE:DATAACL:RULE_1]
 func v2rAclRuleStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 
 	// Wildcard: list all ACL rules in the map
@@ -1024,6 +1040,8 @@ func v2rAclRuleStats(paths []string) ([]tablePath, error) {
 // [COUNTERS_DB PORT_PHY_ATTR Ethernet*] or [COUNTERS_DB PORT_PHY_ATTR Ethernet68]
 // Unlike v2rEthPortStats, this does NOT apply vendor alias translation.
 func v2rPortPhyAttrStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // All Ethernet ports
 		for port, oid := range countersPortNameMap {
@@ -1070,6 +1088,8 @@ func v2rPortPhyAttrStats(paths []string) ([]tablePath, error) {
 // [COUNTERS_DB PORT_PHY_ATTR Ethernet68 phy_rx_signal_detect]
 // Unlike v2rEthPortFieldStats, this does NOT apply vendor alias translation.
 func v2rPortPhyAttrFieldStats(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") {
 		for port, oid := range countersPortNameMap {
@@ -1176,6 +1196,8 @@ func AliasToPortNameMap() map[string]string {
 	// Ensure alias map is initialized
 	initAliasMap()
 
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	output := make(map[string]string, len(alias2nameMap))
 	for alias, portName := range alias2nameMap {
 		output[alias] = portName
@@ -1187,6 +1209,8 @@ func PortToAliasNameMap() map[string]string {
 	// Ensure alias map is initialized
 	initAliasMap()
 
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	output := make(map[string]string, len(name2aliasMap))
 	for portName, alias := range name2aliasMap {
 		output[portName] = alias
@@ -1205,6 +1229,8 @@ func InitCountersFabricPortNameMap() error { return initCountersFabricPortNameMa
 // [COUNTERS_DB PERIODIC_WATERMARKS Ethernet* PriorityGroups] or
 // [COUNTERS_DB PERIODIC_WATERMARKS Ethernet64 PriorityGroups]
 func v2rEthPortPGPeriodicWMs(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	// paths[DbIdx] = "COUNTERS_DB"
 	separator, _ := GetTableKeySeparator(paths[DbIdx], "")
 	var tblPaths []tablePath
@@ -1248,6 +1274,8 @@ func v2rEthPortPGPeriodicWMs(paths []string) ([]tablePath, error) {
 // [COUNTERS_DB USER_WATERMARKS Ethernet64 Queues], or
 // [COUNTERS_DB PERSISTENT_WATERMARKS Ethernet64 Queues]
 func v2rEthPortQueueWMs(paths []string) ([]tablePath, error) {
+	clearMappingsMu.RLock()
+	defer clearMappingsMu.RUnlock()
 	separator, _ := GetTableKeySeparator(paths[DbIdx], "")
 	var tblPaths []tablePath
 	if strings.HasSuffix(paths[KeyIdx], "*") { // user or persistent watermarks on all Ethernet ports

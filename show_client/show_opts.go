@@ -220,4 +220,10 @@ var (
 		showCmdOptionPsuIndexDesc,
 		sdc.IntValue,
 	)
+
+	showCmdOptionDpu = sdc.NewShowCmdOption(
+		"dpu",
+		"[dpu=TEXT] Filter by DPU module name",
+		sdc.StringValue,
+	)
 )

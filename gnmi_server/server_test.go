@@ -482,37 +482,36 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 			}
 		}
 
-		shouldIgnoreOrder := len(ignoreValOrder) > 0 && ignoreValOrder[0]
-		if shouldIgnoreOrder {
-			if gotArr, ok := gotVal.([]interface{}); ok {
-				if wantArr, ok := wantRespVal.([]interface{}); ok {
-					if len(gotArr) != len(wantArr) {
-						t.Errorf("got %d elements, want %d elements", len(gotArr), len(wantArr))
-					} else {
-						for _, w := range wantArr {
-							found := false
-							for _, g := range gotArr {
-								if reflect.DeepEqual(g, w) {
-									found = true
-									break
-								}
-							}
-							if !found {
-								t.Errorf("missing expected element: %v", w)
-							}
-						}
-					}
-				} else {
-					t.Errorf("ignoreValOrder set but wantRespVal is not an array")
-				}
-			} else {
-				if !reflect.DeepEqual(gotVal, wantRespVal) {
-					t.Errorf("got: %v (%T),\nwant %v (%T)", gotVal, gotVal, wantRespVal, wantRespVal)
-				}
-			}
-		} else if !reflect.DeepEqual(gotVal, wantRespVal) {
+		if len(ignoreValOrder) > 0 && ignoreValOrder[0] {
+			// Normalize the values to allow order-insensitive comparison
+			gotVal = normalize(gotVal)
+			wantRespVal = normalize(wantRespVal)
+		}
+
+		if !reflect.DeepEqual(gotVal, wantRespVal) {
 			t.Errorf("got: %v (%T),\nwant %v (%T)", gotVal, gotVal, wantRespVal, wantRespVal)
 		}
+	}
+}
+
+// Normalize recursively sorts maps and slices to allow order-insensitive comparison
+func normalize(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, v2 := range val {
+			val[k] = normalize(v2)
+		}
+		return val
+	case []interface{}:
+		for i, v2 := range val {
+			val[i] = normalize(v2)
+		}
+		sort.SliceStable(val, func(i, j int) bool {
+			return fmt.Sprintf("%v", val[i]) < fmt.Sprintf("%v", val[j])
+		})
+		return val
+	default:
+		return val
 	}
 }
 
@@ -956,6 +955,7 @@ func prepareStateDb(t *testing.T, namespace string) {
 }
 
 func prepareDb(t *testing.T, namespace string) {
+	sdc.ClearMappings()
 	rclient := getRedisClient(t, namespace)
 	defer rclient.Close()
 	rclient.FlushDB(context.Background())
