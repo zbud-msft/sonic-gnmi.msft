@@ -399,8 +399,8 @@ func TestGetInterfaceCounters(t *testing.T) {
 		var patches *gomonkey.Patches
 		if test.mockSleep {
 			patches = gomonkey.ApplyFunc(time.Sleep, func(d time.Duration) {
-				AddDataSet(t, CountersDbNum, portCountersTwoFileName)
-				AddDataSet(t, CountersDbNum, portRatesTwoFileName)
+				LoadDataSet(t, CountersDbNum, portCountersTwoFileName)
+				LoadDataSet(t, CountersDbNum, portRatesTwoFileName)
 			})
 		}
 

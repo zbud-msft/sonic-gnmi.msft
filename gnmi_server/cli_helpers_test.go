@@ -90,6 +90,13 @@ func FlushDataSet(t *testing.T, dbNum int) {
 
 func AddDataSet(t *testing.T, dbNum int, fileName string) {
 	sdc.ClearMappings()
+	LoadDataSet(t, dbNum, fileName)
+}
+
+// LoadDataSet loads data into Redis without clearing in-memory mappings.
+// Use this when only data values change (e.g. counter/rate values) but
+// port-to-OID and alias mappings remain the same.
+func LoadDataSet(t *testing.T, dbNum int, fileName string) {
 	ns, _ := sdcfg.GetDbDefaultNamespace()
 	rclient := getRedisClientN(t, dbNum, ns)
 	defer rclient.Close()
