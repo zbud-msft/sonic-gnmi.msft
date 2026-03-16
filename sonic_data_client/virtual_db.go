@@ -299,7 +299,10 @@ func initCountersFabricPortNameMap() error {
 
 func initDebugNameSwitchStatMap() error {
 	var err error
-	if len(countersDebugNameSwitchStatMap) == 0 {
+	// Reset map for Unit test to ensure that counters db is updated
+	// after changing from single to multi-asic config
+	value := os.Getenv("UNIT_TEST")
+	if len(countersDebugNameSwitchStatMap) == 0 || value == "1" {
 		countersDebugNameSwitchStatMap, err = getSwitchStatMap("COUNTERS_DEBUG_NAME_SWITCH_STAT_MAP")
 		if err != nil {
 			return err

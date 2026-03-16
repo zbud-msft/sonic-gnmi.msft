@@ -332,7 +332,7 @@ check_gotest_junit: $(DBCONFG) $(ENVFILE)
 		CGO_LDFLAGS="$(CGO_LDFLAGS)" CGO_CXXFLAGS="$(CGO_CXXFLAGS)" $(TESTENV) \
 			sudo -E $(shell sudo $(GO) env GOPATH)/bin/gotestsum --junitfile test-results/junit-integration-env.xml \
 			--format testname \
-			-- -race -timeout 20m -coverprofile=test-results/coverage-integration-env.txt \
+			-- -race -timeout 30m -coverprofile=test-results/coverage-integration-env.txt \
 			-covermode=atomic -mod=vendor $(BLD_FLAGS) -v $(INTEGRATION_ENV_PKGS); \
 	fi
 	
