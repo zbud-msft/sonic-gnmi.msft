@@ -865,8 +865,16 @@ func (s *Server) Get(ctx context.Context, req *gnmipb.GetRequest) (*gnmipb.GetRe
 	}
 
 	if err != nil {
+		if target == "SHOW" {
+			log.V(2).Infof("SHOW paths failure: paths=%v, success=false, err=%v", paths, err)
+		}
 		common_utils.IncCounter(common_utils.GNMI_GET_FAIL)
 		return nil, status.Error(codes.NotFound, err.Error())
+	}
+	if dc == nil {
+		// Extra safety net: should never happen after the fix above
+		common_utils.IncCounter(common_utils.GNMI_GET_FAIL)
+		return nil, status.Error(codes.Internal, "nil data client")
 	}
 	defer dc.Close()
 
@@ -875,9 +883,12 @@ func (s *Server) Get(ctx context.Context, req *gnmipb.GetRequest) (*gnmipb.GetRe
 		common_utils.IncCounter(common_utils.GNMI_GET_FAIL)
 		return nil, err
 	}
-	notifications := make([]*gnmipb.Notification, len(paths))
+
 	spbValues, err := dc.Get(nil)
 	if err != nil {
+		if target == "SHOW" {
+			log.V(2).Infof("SHOW paths failure: paths=%v, success=false, err=%v", paths, err)
+		}
 		common_utils.IncCounter(common_utils.GNMI_GET_FAIL)
 		if st, ok := status.FromError(err); ok {
 			return nil, st.Err()
@@ -885,18 +896,26 @@ func (s *Server) Get(ctx context.Context, req *gnmipb.GetRequest) (*gnmipb.GetRe
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	for index, spbValue := range spbValues {
+	if target == "SHOW" {
+		log.V(2).Infof("SHOW paths success: paths=%v, success=true", paths)
+	}
+
+	notifications := make([]*gnmipb.Notification, 0, len(spbValues))
+	for _, spbValue := range spbValues {
+		if spbValue == nil {
+			continue
+		}
 		update := &gnmipb.Update{
 			Path: spbValue.GetPath(),
 			Val:  spbValue.GetVal(),
 		}
-
-		notifications[index] = &gnmipb.Notification{
+		notifications = append(notifications, &gnmipb.Notification{
 			Timestamp: spbValue.GetTimestamp(),
 			Prefix:    prefix,
 			Update:    []*gnmipb.Update{update},
-		}
+		})
 	}
+
 	return &gnmipb.GetResponse{Notification: notifications}, nil
 }
 

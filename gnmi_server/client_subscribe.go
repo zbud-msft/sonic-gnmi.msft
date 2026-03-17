@@ -2,6 +2,7 @@ package gnmi
 
 import (
 	"fmt"
+
 	"github.com/Workiva/go-datastructures/queue"
 	log "github.com/golang/glog"
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"

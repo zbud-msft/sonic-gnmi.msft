@@ -1,0 +1,391 @@
+package gnmi
+
+import (
+	"crypto/tls"
+	"os"
+	"testing"
+	"time"
+
+	"context"
+	pb "github.com/openconfig/gnmi/proto/gnmi"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+)
+
+func TestGetQueueCounters(t *testing.T) {
+	s := createServer(t, ServerPort)
+	go runServer(t, s)
+	defer s.ForceStop()
+	defer ResetDataSetsAndMappings(t)
+
+	tlsConfig := &tls.Config{InsecureSkipVerify: true}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))}
+
+	conn, err := grpc.Dial(TargetAddr, opts...)
+	if err != nil {
+		t.Fatalf("Dialing to %q failed: %v", TargetAddr, err)
+	}
+	defer conn.Close()
+
+	gClient := pb.NewGNMIClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout*time.Second)
+	defer cancel()
+
+	portsFileName := "../testdata/PORTS.txt"
+	portTableFileName := "../testdata/PORT_TABLE.txt"
+	queueOidMappingFileName := "../testdata/QUEUE_OID_MAPPING.txt"
+	queueCountersFileName := "../testdata/QUEUE_COUNTERS.txt"
+	allQueueCounters, err := os.ReadFile("../testdata/QUEUE_COUNTERS_RESULTS_ALL.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected query results for queues of all interfaces: %v", err)
+	}
+	allQueueTrimCounters, err := os.ReadFile("../testdata/QUEUE_COUNTERS_RESULTS_ALL_TRIM.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected query results for trim counters of all interfaces: %v", err)
+	}
+	oneSelectedQueueCounters, err := os.ReadFile("../testdata/QUEUE_COUNTERS_RESULTS_ONE.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected query results for queues of Ethernet40: %v", err)
+	}
+	twoSelectedQueueCounters, err := os.ReadFile("../testdata/QUEUE_COUNTERS_RESULTS_TWO.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected query results for queues of Ethernet0 and Ethernet80: %v", err)
+	}
+	oneSelectedQueueCountersNonZero, err := os.ReadFile("../testdata/QUEUE_COUNTERS_RESULTS_ONE_NON_ZERO.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected non-zero query results for queues of Ethernet40: %v", err)
+	}
+	oneSelectedQueueTrimCountersNonZero, err := os.ReadFile("../testdata/QUEUE_COUNTERS_RESULTS_ONE_NON_ZERO_TRIM.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected non-zero query results for trim counters of Ethernet40: %v", err)
+	}
+	wredCountersAll, err := os.ReadFile("../testdata/WRED_COUNTERS_RESULTS_ALL.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected query results for WRED counters of all interfaces: %v", err)
+	}
+	wredCountersEth0, err := os.ReadFile("../testdata/WRED_COUNTERS_RESULTS_ETH0.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected query results for WRED counters of Ethernet0: %v", err)
+	}
+	wredCountersEth40Eth80, err := os.ReadFile("../testdata/WRED_COUNTERS_RESULTS_ETH40_ETH80.txt")
+	if err != nil {
+		t.Fatalf("Failed to read expected query results for WRED counters of Ethernet40 and Ethernet80: %v", err)
+	}
+	wredCountersEth0NonZero := []byte(`{"Ethernet0:0": {}, "Ethernet0:1": {}, "Ethernet0:2": {"WredDrp/pkts": "2", "WredDrp/bytes": "512"}}`)
+
+	ResetDataSetsAndMappings(t)
+
+	tests := []struct {
+		desc        string
+		pathTarget  string
+		textPbPath  string
+		wantRetCode codes.Code
+		wantRespVal interface{}
+		valTest     bool
+		testInit    func()
+	}{
+		{
+			desc:       "query SHOW queue counters NO DATA",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" >
+			`,
+			wantRetCode: codes.OK,
+		},
+		{
+			desc:       "query SHOW queue counters",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: allQueueCounters,
+			valTest:     true,
+			testInit: func() {
+				AddDataSet(t, ConfigDbNum, portsFileName)
+				AddDataSet(t, ApplDbNum, portTableFileName)
+				AddDataSet(t, CountersDbNum, queueOidMappingFileName)
+				AddDataSet(t, CountersDbNum, queueCountersFileName)
+			},
+		},
+		{
+			desc:       "query SHOW queue counters trim option (trim=true)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "trim" value: "true" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: allQueueTrimCounters,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interfaces option (one interface)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet40" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: oneSelectedQueueCounters,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interface arg",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" >
+				elem: <name: "Ethernet40" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: oneSelectedQueueCounters,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interfaces option (two interfaces)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet0,Ethernet80" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: twoSelectedQueueCounters,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interfaces option and interface arg",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet80" }>
+				elem: <name: "Ethernet0" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: twoSelectedQueueCounters,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interfaces option and interface arg with overlap",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet0,Ethernet80" }>
+				elem: <name: "Ethernet80" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: twoSelectedQueueCounters,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interfaces and nonzero options (one interface, nonzero=true)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet40" } key: { key: "nonzero" value: "true" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: oneSelectedQueueCountersNonZero,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interfaces and nonzero options (one interface, nonzero=false)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet40" } key: { key: "nonzero" value: "false" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: oneSelectedQueueCounters,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interfaces, nonzero, and trim options (one interface, nonzero=true, trim=true)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet40" } key: { key: "nonzero" value: "true" } key: { key: "trim" value: "true" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: oneSelectedQueueTrimCountersNonZero,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue counters interface arg with nonzero and trim options (nonzero=true, trim=true)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "nonzero" value: "true" } key: { key: "trim" value: "true" }>
+				elem: <name: "Ethernet40" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: oneSelectedQueueTrimCountersNonZero,
+			valTest:     true,
+		},
+		// invalid cases for show queue counters
+		{
+			desc:       "query SHOW queue counters interfaces option (invalid interface)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" key: { key: "interfaces" value: "Ethernet7" }>
+			`,
+			wantRetCode: codes.NotFound,
+		},
+		{
+			desc:       "query SHOW queue counters interface arg (invalid interface)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "counters" >
+				elem: <name: "Ethernet7" >
+			`,
+			wantRetCode: codes.NotFound,
+		},
+		// show queue wredcounters
+		{
+			desc:       "query SHOW queue wredcounters NO DATA",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" >
+			`,
+			wantRetCode: codes.OK,
+		},
+		{
+			desc:       "query SHOW queue wredcounters (all interfaces)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersAll,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters (one interface)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "interfaces" value: "Ethernet0" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth0,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters (two interfaces)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "interfaces" value: "Ethernet40,Ethernet80" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth40Eth80,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters interface arg",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" >
+				elem: <name: "Ethernet0" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth0,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters interfaces option and interface arg",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "interfaces" value: "Ethernet80" }>
+				elem: <name: "Ethernet40" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth40Eth80,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters interfaces option and interface arg with overlap",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "interfaces" value: "Ethernet40,Ethernet80" }>
+				elem: <name: "Ethernet40" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth40Eth80,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters (one interface, nonzero=true)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "interfaces" value: "Ethernet0" } key: { key: "nonzero" value: "true" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth0NonZero,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters with interface arg (nonzero=true)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "nonzero" value: "true" }>
+				elem: <name: "Ethernet0" >
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth0NonZero,
+			valTest:     true,
+		},
+		{
+			desc:       "query SHOW queue wredcounters (one interface, nonzero=false)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "interfaces" value: "Ethernet0" } key: { key: "nonzero" value: "false" }>
+			`,
+			wantRetCode: codes.OK,
+			wantRespVal: wredCountersEth0,
+			valTest:     true,
+		},
+		// invalid cases for show queue wredcounters
+		{
+			desc:       "query SHOW queue wredcounters (invalid interface)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" key: { key: "interfaces" value: "Ethernet7" }>
+			`,
+			wantRetCode: codes.NotFound,
+		},
+		{
+			desc:       "query SHOW queue wredcounters with interface arg (invalid interface)",
+			pathTarget: "SHOW",
+			textPbPath: `
+				elem: <name: "queue" >
+				elem: <name: "wredcounters" >
+				elem: <name: "Ethernet7" >
+			`,
+			wantRetCode: codes.NotFound,
+		},
+	}
+
+	for _, test := range tests {
+		if test.testInit != nil {
+			test.testInit()
+		}
+		t.Run(test.desc, func(t *testing.T) {
+			runTestGet(t, ctx, gClient, test.pathTarget, test.textPbPath, test.wantRetCode, test.wantRespVal, test.valTest)
+		})
+	}
+}

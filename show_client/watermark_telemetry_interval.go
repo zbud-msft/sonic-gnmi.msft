@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	log "github.com/golang/glog"
+	"github.com/sonic-net/sonic-gnmi/show_client/common"
 	sdc "github.com/sonic-net/sonic-gnmi/sonic_data_client"
 )
 
@@ -18,11 +19,11 @@ admin@sonic:~$ redis-cli -n 4 HGETALL "WATERMARK_TABLE|TELEMETRY_INTERVAL"
 2) "30"
 */
 
-func getWatermarkTelemetryInterval(options sdc.OptionMap) ([]byte, error) {
+func getWatermarkTelemetryInterval(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	queries := [][]string{
 		{"CONFIG_DB", "WATERMARK_TABLE", "TELEMETRY_INTERVAL"},
 	}
-	data, err := GetMapFromQueries(queries)
+	data, err := common.GetMapFromQueries(queries)
 	if err != nil {
 		log.Errorf("Unable to get watermark interval data from queries %v, got err: %v", queries, err)
 		return nil, err

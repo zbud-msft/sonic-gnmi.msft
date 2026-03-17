@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	spb_gnoi "github.com/sonic-net/sonic-gnmi/proto/gnoi"
-	"golang.org/x/net/context"
 )
 
 func TestDummyClearNeighbor(t *testing.T) {

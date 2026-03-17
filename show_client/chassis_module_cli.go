@@ -124,7 +124,7 @@ func createModuleStatusFromFlatData(moduleName string, stateData, configData map
 	return module
 }
 
-func getChassisModuleStatus(options sdc.OptionMap) ([]byte, error) {
+func getChassisModuleStatus(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	log.V(2).Infof("getChassisModuleStatus: called with options: %v", getOptionsKeys(options))
 
 	// Check if a specific module is requested
@@ -285,7 +285,7 @@ func createModuleMidplaneStatusFromFlatData(moduleName string, stateData map[str
 	return module
 }
 
-func getChassisModuleMidplaneStatus(options sdc.OptionMap) ([]byte, error) {
+func getChassisModuleMidplaneStatus(args sdc.CmdArgs, options sdc.OptionMap) ([]byte, error) {
 	log.V(2).Infof("getChassisModuleMidplaneStatus: called with options: %v", getOptionsKeys(options))
 
 	// Check if a specific module is requested

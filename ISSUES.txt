@@ -1,0 +1,154 @@
+Crash Log #1
+
+2026 Feb 23 21:51:18.455058 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry fatal error: concurrent map writes
+2026 Feb 23 21:51:18.462530 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry fatal error: concurrent map writes
+2026 Feb 23 21:51:18.462530 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry 
+2026 Feb 23 21:51:18.462530 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry goroutine 169859 [running]:
+2026 Feb 23 21:51:18.462573 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry runtime.fatal({0x12cbd58?
+2026 Feb 23 21:51:18.462573 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry , 0x11f7f40?})
+2026 Feb 23 21:51:18.462585 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/panic.go:1066 +0x5d fp=0xc00100eee8 sp=0xc00100eeb8 pc=0x4f4b1d
+2026 Feb 23 21:51:18.462601 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry runtime.mapassign_faststr(0x11435a0, 0xc0017fa660, {0x12df7ff, 0x21})
+2026 Feb 23 21:51:18.462601 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/map_faststr.go:295 +0x3a9 fp=0xc00100ef58 sp=0xc00100eee8 pc=0x4d0809 
+2026 Feb 23 21:51:18.462641 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.GetStatLookup({0x12df7ff, 0x21})
+2026 Feb 23 21:51:18.462641 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011
+2026 Feb 23 21:51:18.462658 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry /sonic/src/sonic-gnmi/show_client/dropstat_cli.go:246 +0x18e fp=0xc00100f040 sp=0xc00100ef58 pc=0xf3340e
+2026 Feb 23 21:51:18.462658 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getConfiguredCounters({0x12df7ff, 0x21})
+2026 Feb 23 21:51:18.462676 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/dropstat_cli.go:287 +0x3b fp=0xc00100f140 sp=0xc00100f040 pc=0xf337fb
+2026 Feb 23 21:51:18.462676 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.gatherCounters({0xc001d14340, 0x4, 0x0?},
+2026 Feb 23 21:51:18.462711 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry {0x12df7ff, 0x21}, {0x0, 0x0}, {0xc001496048, 0x12})
+2026 Feb 23 21:51:18.462711 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/dropstat_cli.go:136 +0x71 fp=0xc00100f1e8 sp=0xc00100f140 pc=0xf32591
+2026 Feb 23 21:51:18.462729 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.showPortDropCounts({0x0,
+2026 Feb 23 21:51:18.462753 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry 0x0}, {0xc001496048, 0x12})
+2026 Feb 23 21:51:18.462772 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/dropstat_cli.go:90 +0x1d7 fp=0xc00100f4a0 sp=0xc00100f1e8 pc=0xf31e37
+2026 Feb 23 21:51:18.462772 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getDropCounters({0x1161760?, 0xc0017fa630?, 0x12b5b69?}, 0x4
+2026 Feb 23 21:51:18.462811 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry ?)
+2026 Feb 23 21:51:18.462811 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/dropstat_cli.go:71 +0x22a fp=0xc00100f548 sp=0xc00100f4a0 pc=0xf31b0a
+2026 Feb 23 21:51:18.462830 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.(*ShowClient).Get(0xc001176070, 0x1?)
+2026 Feb 23 21:51:18.462854 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/show_client.go:118 +0x25a fp=0xc00100f728 sp=0xc00100f548 pc=0xe1c09a
+2026 Feb 23 21:51:18.462854 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry
+2026 Feb 23 21:51:18.462881 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/gnmi_server.(*Server).Get(0xc000afe280, {0x14acee0, 0xc0017fa390}, 0xc004afa180)
+2026 Feb 23 21:51:18.462881 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/gnmi_server/server.go:429 +0x6e8 fp=0xc00100f918 sp=0xc00100f728 pc=0xf90d68
+2026 Feb 23 21:51:18.462890 ATL21-0101-0007-14BT0 INFO #supervisord: telemetry github.com/openconfig/gnmi/proto/gnmi._GNMI_Get_Handler({0x126b340?, 0xc000afe280}
+
+
+Crash Log #2
+
+2026 Feb 19 14:21:14.332543 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry fatal error: concurrent map writes
+2026 Feb 19 14:21:14.332543 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry fatal error: concurrent map read and map write
+2026 Feb 19 14:21:14.339869 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry
+2026 Feb 19 14:21:14.339869 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry goroutine 30 [running]:
+2026 Feb 19 14:21:14.339869 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry runtime.fatal({0x12cbd58
+2026 Feb 19 14:21:14.339908 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry ?, 0x0?})
+2026 Feb 19 14:21:14.339908 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/panic.go:1066 +0x5d fp=0xc000bc29a0 sp=0xc000bc2970 pc=0x4f4b1d
+2026 Feb 19 14:21:14.339921 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry runtime.mapassign_faststr(0x11435a0, 0xc0008683c0, {0xc0005d35c0, 0xb})
+2026 Feb 19 14:21:14.339938 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/map_faststr.go:212 +0x56 fp=0xc000bc2a10 sp=0xc000bc29a0 pc=0x4d04b6
+2026 Feb 19 14:21:14.339938 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.initCountersPGNameMap()
+2026 Feb 19 14:21:14.339954 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/virtual_db.go:128 +0x15e fp=0xc000bc2af0 sp=0xc000bc2a10 pc=
+2026 Feb 19 14:21:14.339985 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry 0xe25ebe
+2026 Feb 19 14:21:14.339985 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.populateDbtablePath(0xc000bc31e8, 0xc00047e080, 0xc000bc2f70)
+2026 Feb 19 14:21:14.339997 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/db_client.go:664 +0x297 fp=0xc000bc2f58 sp=0xc000bc2af0 pc=0xe09637
+2026 Feb 19 14:21:14.340043 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.PopulateTablePaths(0x11fe880?, 0xc00047e080)
+2026 Feb 19 14:21:14.340043 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/show_client.go:140 +0xaa fp=0xc000bc30d0 sp=0xc000bc2f58 pc=0xe1c76a
+2026 Feb 19 14:21:14.340163 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client/common.CreateTablePathsFromQueries({0xc000576078?, 0x1, 0xc000908040
+2026 Feb 19 14:21:14.340214 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry ?})
+2026 Feb 19 14:21:14.340214 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/common/db.go:82 +0x215 fp=0xc000bc3270 sp=0xc000bc30d0 pc=0xf0eb55
+2026 Feb 19 14:21:14.340223 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client/common.GetMapFromQueries({0xc000576078?, 0x0?, 0x4?})
+2026 Feb 19 14:21:14.340238 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/common/db.go:33 +0x25 fp=0xc000bc32d0 sp=
+2026 Feb 19 14:21:14.340280 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry 0xc000bc3270 pc=0xf0e785
+2026 Feb 19 14:21:14.340280 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getQueueWatermarksSnapshot({0x0?, 0x0?, 0x12bd992?}, 0x0, {0x12c339f, 0xf})
+2026 Feb 19 14:21:14.340289 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/queue_watermark_cli.go:31 +0x151 fp=0xc000bc3490 sp=0xc000bc32d0 pc=0xf5c6f1
+2026 Feb 19 14:21:14.340303 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getQueueWatermarksCommon(0xe1ce45?, 0xc000aca700?, {
+2026 Feb 19 14:21:14.340347 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry 0x12c339f, 0xf})
+2026 Feb 19 14:21:14.340347 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/queue_watermark_cli.go:76 +0xf1 fp=0xc000bc3518 sp=0xc000bc3490 pc=0xf5d031
+2026 Feb 19 14:21:14.340356 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getQueueUserWatermarksAll({0x13455b8?, 0xc00084b5f0?, 0x12b5b69?}, 0x4?)
+2026 Feb 19 14:21:14.340372 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/queue_watermark_cli.go:108 +0x2a fp=0xc000bc3548 sp=0xc000bc3518 pc=0xf5d50a
+2026 Feb 19 14:21:14.340415 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.(*ShowClient).Get(0xc000269180, 0x1?)
+2026 Feb 19 14:21:14.340415 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/show_client.go:118 +0x25a fp=0xc000bc3728 sp=0xc000bc3548 pc=0xe1c09a
+2026 Feb 19 14:21:14.340427 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/gnmi_server.(*Server).Get(0xc000a360f0, {0x14acee0, 0xc000acd1a0}, 0xc000aca500)
+2026 Feb 19 14:21:14.340441 ATL21-0101-0005-14BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/gnmi_server/server.go:429 +0x6e8 fp=0xc000bc3918 sp=0xc000bc3728 pc=0xf90d68
+
+Crash Log #3
+
+2026 Feb 19 14:20:17.591714 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry fatal error: concurrent map writes
+2026 Feb 19 14:20:17.594749 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry
+2026 Feb 19 14:20:17.594749 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry goroutine 62 [running]:
+2026 Feb 19 14:20:17.594749 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry runtime.fatal({
+2026 Feb 19 14:20:17.594821 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry 0x12cbd58?, 0x0?})
+2026 Feb 19 14:20:17.594821 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/panic.go:1066 +0x5d fp=0xc000c829a0 sp=0xc000c82970 pc=0x4f4b1d
+2026 Feb 19 14:20:17.594821 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry runtime.mapassign_faststr(0x11435a0, 0xc00052c3f0, {0xc000d7a2a0, 0xb})
+2026 Feb 19 14:20:17.594854 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/map_faststr.go:295 +0x3a9 fp=0xc000c82a10 sp=0xc000c829a0 pc=0x4d0809
+2026 Feb 19 14:20:17.594854 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.initCountersPGNameMap()
+2026 Feb 19 14:20:17.594854 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/virtual_db.go:128 +0x15e fp=0xc000c82af0 sp=0xc000c82a10 pc=0xe25ebe
+2026 Feb 19 14:20:17.594872 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry
+2026 Feb 19 14:20:17.594881 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.populateDbtablePath(0xc000c831e8, 0xc000cae000, 0xc000c82f70)
+2026 Feb 19 14:20:17.594881 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/db_client.go:664 +0x297 fp=0xc000c82f58 sp=0xc000c82af0 pc=0xe09637
+2026 Feb 19 14:20:17.594948 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.PopulateTablePaths(0x11fe880?, 0xc000cae000)
+2026 Feb 19 14:20:17.594948 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/show_client.go:140 +0xaa fp=0xc000c830d0
+2026 Feb 19 14:20:17.595003 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry  sp=0xc000c82f58 pc=0xe1c76a
+2026 Feb 19 14:20:17.595091 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client/common.CreateTablePathsFromQueries({0xc000322000?, 0x1, 0xc000896040
+2026 Feb 19 14:20:17.595142 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry ?})
+2026 Feb 19 14:20:17.595142 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/common/db.go:82 +0x215 fp=0xc000c83270 sp=0xc000c830d0 pc=0xf0eb55
+2026 Feb 19 14:20:17.595153 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client/common.GetMapFromQueries({0xc000322000?, 0x0?, 0xc0012bfc68?})
+2026 Feb 19 14:20:17.595169 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/common/db.go:33 +0x25 fp=0xc000c832d0 sp=
+2026 Feb 19 14:20:17.595209 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry 0xc000c83270 pc=0xf0e785
+2026 Feb 19 14:20:17.595209 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getQueueWatermarksSnapshot({0x0?, 0x0?, 0x12bd992?}, 0x0, {0x12c339f, 0xf})
+2026 Feb 19 14:20:17.595220 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/queue_watermark_cli.go:31 +0x151 fp=0xc000c83490 sp=0xc000c832d0 pc=0xf5c6f1
+2026 Feb 19 14:20:17.595236 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getQueueWatermarksCommon(
+2026 Feb 19 14:20:17.595272 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry 0xe1ce45?, 0xc00037a480?, {0x12c339f, 0xf})
+2026 Feb 19 14:20:17.595272 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/queue_watermark_cli.go:76 +0xf1 fp=0xc000c83518 sp=0xc000c83490 pc=0xf5d031
+2026 Feb 19 14:20:17.595283 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getQueueUserWatermarksAll({0x13455b8?, 0xc00089f5f0?, 0x12b5b69?}, 0x4?)
+2026 Feb 19 14:20:17.595331 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/queue_watermark_cli.go:108 +0x2a fp=0xc000c83548 sp=0xc000c83518 pc=0xf5d50a
+2026 Feb 19 14:20:17.595331 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.(*ShowClient).Get(0xc00019cfc0, 0x1?)
+2026 Feb 19 14:20:17.595341 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/show_client.go:118 +0x25a fp=0xc000c83728 sp=0xc000c83548 pc=0xe1c09a
+2026 Feb 19 14:20:17.595358 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/gnmi_server.(*Server).Get
+2026 Feb 19 14:20:17.595398 ATL21-0101-0015-12BT0 INFO #supervisord: telemetry (0xc000478280, {0x14acee0, 0xc000a81140}, 0xc000aa8400)
+
+Crash Log #4
+
+2026 Feb 16 01:10:25.025870 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry fatal error: concurrent map writes    
+2026 Feb 16 01:10:25.028994 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry
+2026 Feb 16 01:10:25.028994 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry goroutine 107 [running]:
+2026 Feb 16 01:10:25.029027 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry runtime.fatal({
+2026 Feb 16 01:10:25.029041 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry 0x12cedfd?, 0x5bbcfd?})
+2026 Feb 16 01:10:25.029058 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/panic.go:1066 +0x5d fp=0xc000a49620 sp=0xc000a495f0 pc=0x4f4b1d
+2026 Feb 16 01:10:25.029058 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry runtime.mapassign_faststr(0x11467e0, 0xc000d02ba0, {0xc000c0e67c, 0x1})
+2026 Feb 16 01:10:25.029087 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/usr/lib/go-1.19/src/runtime/map_faststr.go:212 +0x56 fp=0xc000a49690 sp=0xc000a49620 pc=0x4d04b6
+2026 Feb 16 01:10:25.029094 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.initCountersPGNameMap()
+2026 Feb 16 01:10:25.029107 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/virtual_db.go:137 +0x1c5 fp=0xc000a49770 sp=0xc000a49690 pc=0xe26025
+2026 Feb 16 01:10:25.029129 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.populateDbtablePath(0xc000a49e68, 0xc0006c9b80
+2026 Feb 16 01:10:25.029129 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry , 0xc000a49bf0)
+2026 Feb 16 01:10:25.029149 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/db_client.go:663 +0x297 fp=0xc000a49bd8 sp=0xc000a49770 pc=0xe09637
+2026 Feb 16 01:10:25.029161 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.PopulateTablePaths(0x1201880?, 0xc0006c9b80)
+2026 Feb 16 01:10:25.029161 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/show_client.go:140 +0xaa fp=0xc000a49d50 sp=0xc000a49bd8 pc=0xe1c86a
+2026 Feb 16 01:10:25.029186 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client/common.CreateTablePathsFromQueries({0xc00019c9a8?, 0x1, 0xc000cdd4d0?})
+2026 Feb 16 01:10:25.029186 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/common/db.go:82 +0x215 fp=0xc000a49ef0
+2026 Feb 16 01:10:25.029211 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry  sp=0xc000a49d50 pc=0xf0f3d5
+2026 Feb 16 01:10:25.029211 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client/common.GetMapFromQueries({0xc00019c9a8?, 0x7a0845?, 0x7ae880?})
+2026 Feb 16 01:10:25.029237 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/common/db.go:33 +0x25 fp=0xc000a49f50 sp=0xc000a49ef0 pc=0xf0f005
+2026 Feb 16 01:10:25.029237 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getInterfaceCountersSnapshot({0x0, 0x0, 0xc000ad4000?})
+2026 Feb 16 01:10:25.029255 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/interface_counters_helper.go:259 +0xcc fp=0xc000a4aaa0 sp=0xc000a49f50 pc=0xf465cc
+2026 Feb 16 01:10:25.029290 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.snapshotWithOptionalDiff({0x0, 0x0, 0x0}, 0x0, 0x0)
+2026 Feb 16 01:10:25.029305 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/interface_counters_helper.go:236 +0x45 fp=0xc000a4ab20 sp=0xc000a4aaa0 pc=0xf462e5
+2026 Feb 16 01:10:25.029312 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/show_client.getInterfaceCounters({0x1164760?, 0xc000cdd4a0?, 0x12b8b70?}, 0x4?)
+2026 Feb 16 01:10:25.029329 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/show_client/interface_counters_cli.go:33 +0xe7 fp=
+2026 Feb 16 01:10:25.029362 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry 0xc000a4b528 sp=0xc000a4ab20 pc=0xf44047
+2026 Feb 16 01:10:25.029377 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry github.com/sonic-net/sonic-gnmi/sonic_data_client.(*ShowClient).Get(0xc00023c850, 0x1?)
+2026 Feb 16 01:10:25.029377 DSM12-0101-0829-01BT0 INFO #supervisord: telemetry #011/sonic/src/sonic-gnmi/sonic_data_client/show_client.go:118 +0x25a fp=0xc000a4b708 sp=0xc000a4b528 pc=0xe1c19a
+
+
+Verbose logs in PROD
+
+virtual_db.go:306] Missing mapping between PFC priority  to queue
+srv6_cli.go:50] Processing SID: fd30:0:40c0::/48 with Counter OID: oid:0x54000
+services_cli.go:51] Command output
+services_cli.go:48] Processing service
+telemetry W0210 00:58:49.730592 3776888 interface_counters_helper.go:777] Invalid counter value N/A: strconv.ParseInt: parsing "N/A": invalid syntax
+lldp_helpers.go:113] Start to get lldp data from lldpctl
+ipv6_fib_cli.go:32] [show ipv6 fib]|Found 552 entries
+interface.go:87] Aggregated 351 interfaces across namespaces
+interface.go:42] GetIPInterfaces
+ipv6_interfaces_cli.go:16] Executing 'show ipv6 interfaces' command via ipinterfaces library
+watermark_telemetry_interval.go:43] Key 'interval' not found or empty in data
+
+Why is the below failing?
+file.go:17] Failed to read'/tmp/cache/portstat/1000/portstat', open /tmp/cache/portstat/1000/portstat: no such file or directory
