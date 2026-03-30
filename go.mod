@@ -22,6 +22,7 @@ require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/kylelemons/godebug v1.1.0
 	github.com/maruel/natural v1.1.1
+	github.com/mdlayher/netlink v1.7.2
 	github.com/msteinert/pam v0.0.0-20201130170657-e61372126161
 	github.com/openconfig/gnmi v0.14.1
 	github.com/openconfig/gnoi v0.3.0
@@ -31,6 +32,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/crypto v0.36.0
 	golang.org/x/net v0.38.0
+	golang.org/x/sys v0.33.0
 	google.golang.org/grpc v1.69.2
 	google.golang.org/grpc/security/advancedtls v1.0.0
 	google.golang.org/protobuf v1.36.11
@@ -52,6 +54,8 @@ require (
 	github.com/envoyproxy/go-control-plane v0.12.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.0.4 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
+	github.com/josharian/native v1.1.0 // indirect
+	github.com/mdlayher/socket v0.4.1 // indirect
 	github.com/onsi/ginkgo v1.10.3 // indirect
 	github.com/onsi/gomega v1.7.1 // indirect
 	github.com/openconfig/goyang v0.0.0-20200309174518-a00bece872fc // indirect
@@ -61,7 +65,7 @@ require (
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go4.org/intern v0.0.0-20211027215823-ae77deb06f29 // indirect
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20230525183740-e7c30c78aeb2 // indirect
-	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/term v0.32.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240318140521-94a12d6c2237 // indirect
@@ -78,5 +82,6 @@ replace (
 	golang.org/x/crypto => golang.org/x/crypto v0.24.0
 	golang.org/x/sys => golang.org/x/sys v0.26.0
 	google.golang.org/grpc => google.golang.org/grpc v1.64.1
+	golang.org/x/sync => golang.org/x/sync v0.6.0
 	google.golang.org/protobuf => google.golang.org/protobuf v1.34.1
 )
