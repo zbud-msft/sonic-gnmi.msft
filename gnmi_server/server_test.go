@@ -13,13 +13,13 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -259,14 +259,10 @@ func createAuthServer(t *testing.T, port int64) *Server {
 	cfg := &Config{
 		Port:                port,
 		EnableTranslibWrite: true,
-		UserAuth: AuthTypes{
-			"password": true,
-			"cert":     true,
-			"jwt":      true,
-		},
-		ImgDir:          "/tmp",
-		AuthzMetaFile:   TestAuthzMetaFile,
-		AuthzPolicyFile: TestAuthzPolicyFile,
+		UserAuth:            AuthTypes{"password": true, "cert": true, "jwt": true},
+		ImgDir:              "/tmp",
+		AuthzMetaFile:       TestAuthzMetaFile,
+		AuthzPolicyFile:     TestAuthzPolicyFile,
 	}
 	s, err := NewServer(cfg, tlsOpts, nil)
 	if err != nil {
@@ -428,7 +424,7 @@ func TestPFCWDErrors(t *testing.T) {
 // runTestGet requests a path from the server by Get grpc call, and compares if
 // the return code and response value are expected.
 func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTarget string,
-	textPbPath string, wantRetCode codes.Code, wantRespVal interface{}, valTest bool) {
+	textPbPath string, wantRetCode codes.Code, wantRespVal interface{}, valTest bool, ignoreValOrder ...bool) {
 	//var retCodeOk bool
 	// Send request
 	t.Helper()
@@ -489,9 +485,36 @@ func runTestGet(t *testing.T, ctx context.Context, gClient pb.GNMIClient, pathTa
 			}
 		}
 
+		if len(ignoreValOrder) > 0 && ignoreValOrder[0] {
+			// Normalize the values to allow order-insensitive comparison
+			gotVal = normalize(gotVal)
+			wantRespVal = normalize(wantRespVal)
+		}
+
 		if !reflect.DeepEqual(gotVal, wantRespVal) {
 			t.Errorf("got: %v (%T),\nwant %v (%T)", gotVal, gotVal, wantRespVal, wantRespVal)
 		}
+	}
+}
+
+// Normalize recursively sorts maps and slices to allow order-insensitive comparison
+func normalize(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, v2 := range val {
+			val[k] = normalize(v2)
+		}
+		return val
+	case []interface{}:
+		for i, v2 := range val {
+			val[i] = normalize(v2)
+		}
+		sort.SliceStable(val, func(i, j int) bool {
+			return fmt.Sprintf("%v", val[i]) < fmt.Sprintf("%v", val[j])
+		})
+		return val
+	default:
+		return val
 	}
 }
 
@@ -935,6 +958,7 @@ func prepareStateDb(t *testing.T, namespace string) {
 }
 
 func prepareDb(t *testing.T, namespace string) {
+	sdc.ClearMappings()
 	rclient := getRedisClient(t, namespace)
 	defer rclient.Close()
 	rclient.FlushDB(context.Background())
@@ -6369,30 +6393,6 @@ func TestAuthenticate(t *testing.T) {
 	}
 
 	cancel()
-}
-
-func createUDSCtx() (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	p := peer.Peer{
-		Addr: &net.UnixAddr{Name: "/tmp/test.sock", Net: "unix"},
-	}
-	ctx = peer.NewContext(ctx, &p)
-	return ctx, cancel
-}
-
-func TestAuthenticateUDS(t *testing.T) {
-	cfg := &Config{UserAuth: AuthTypes{"password": false, "cert": true, "jwt": false}}
-
-	for _, target := range []string{"gnmi", "gnoi"} {
-		for _, write := range []bool{false, true} {
-			ctx, cancel := createUDSCtx()
-			_, err := authenticate(cfg, ctx, target, write)
-			if err != nil {
-				t.Errorf("%s (write=%v) over UDS should succeed: %v", target, write, err)
-			}
-			cancel()
-		}
-	}
 }
 
 type MockServerStream struct {

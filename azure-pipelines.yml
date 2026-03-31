@@ -69,7 +69,7 @@ stages:
     - bash: |
         set -euo pipefail
         export PATH=$PATH:/usr/local/go/bin:$(go env GOPATH)/bin
-        cd sonic-gnmi
+        cd sonic-gnmi.msft
         go mod tidy
         make -f pure.mk junit-xml
       displayName: 'Run Pure Package Tests'
@@ -79,7 +79,7 @@ stages:
       condition: always()
       inputs:
         testResultsFormat: 'JUnit'
-        testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-gnmi/test-results/junit-pure.xml'
+        testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-gnmi.msft/test-results/junit-pure.xml'
         failTaskOnFailedTests: true
         publishRunAttachments: true
         testRunTitle: 'Pure Package Tests'
@@ -89,7 +89,7 @@ stages:
       condition: always()
       inputs:
         codeCoverageTool: Cobertura
-        summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-gnmi/test-results/coverage-pure.xml'
+        summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-gnmi.msft/test-results/coverage-pure.xml'
 
   # Memory leak testing with address sanitizer
   - job: MemoryLeakJob
@@ -103,7 +103,7 @@ stages:
     variables:
       DIFF_COVER_CHECK_THRESHOLD: 80
       DIFF_COVER_ENABLE: 'true'
-      DIFF_COVER_WORKING_DIRECTORY: $(System.DefaultWorkingDirectory)/sonic-gnmi
+      DIFF_COVER_WORKING_DIRECTORY: $(System.DefaultWorkingDirectory)/sonic-gnmi.msft
       UNIT_TEST_FLAG: 'ENABLE_TRANSLIB_WRITE=y'
 
     container:
@@ -134,7 +134,7 @@ stages:
     
     - bash: |
         set -euo pipefail
-        pushd sonic-gnmi
+        pushd sonic-gnmi.msft
         make all && $(UNIT_TEST_FLAG) make check_memleak_junit
         popd
       displayName: 'Run Memory Leak Tests'
@@ -144,7 +144,7 @@ stages:
       condition: always()
       inputs:
         testResultsFormat: 'JUnit'
-        testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-gnmi/test-results/junit-memleak-standard.xml'
+        testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-gnmi.msft/test-results/junit-memleak-standard.xml'
         failTaskOnFailedTests: true
         publishRunAttachments: true
         testRunTitle: 'Memory Leak Tests'
@@ -161,7 +161,7 @@ stages:
     variables:
       DIFF_COVER_CHECK_THRESHOLD: 80
       DIFF_COVER_ENABLE: 'true'
-      DIFF_COVER_WORKING_DIRECTORY: $(System.DefaultWorkingDirectory)/sonic-gnmi
+      DIFF_COVER_WORKING_DIRECTORY: $(System.DefaultWorkingDirectory)/sonic-gnmi.msft
 
     container:
       image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:latest
@@ -200,14 +200,14 @@ stages:
         NO_TEST_BINS=1 dpkg-buildpackage -rfakeroot -b -us -uc
         popd
 
-        pushd sonic-gnmi
+        pushd sonic-gnmi.msft
         ENABLE_TRANSLIB_WRITE=y ENABLE_NATIVE_WRITE=y dpkg-buildpackage -rfakeroot -us -uc -b -j$(nproc) && cp ../*.deb $(Build.ArtifactStagingDirectory)/
       displayName: "Build"
 
     # Run pure package tests for coverage (test results already published by PureCIJob)
     - bash: |
         set -euo pipefail
-        pushd sonic-gnmi
+        pushd sonic-gnmi.msft
         make -f pure.mk junit-xml || true
         popd
       displayName: "Run Pure Package Tests (coverage only)"
@@ -215,7 +215,7 @@ stages:
     # Run integration tests
     - bash: |
         set -euo pipefail
-        pushd sonic-gnmi
+        pushd sonic-gnmi.msft
         make all && $(UNIT_TEST_FLAG) make check_gotest_junit
         popd
       displayName: "Run Integration Tests"
@@ -226,19 +226,19 @@ stages:
       inputs:
         testResultsFormat: 'JUnit'
         testResultsFiles: |
-          $(System.DefaultWorkingDirectory)/sonic-gnmi/test-results/junit-integration-basic.xml
-          $(System.DefaultWorkingDirectory)/sonic-gnmi/test-results/junit-integration-env.xml
-          $(System.DefaultWorkingDirectory)/sonic-gnmi/test-results/junit-integration-dialout.xml
+          $(System.DefaultWorkingDirectory)/sonic-gnmi.msft/test-results/junit-integration-basic.xml
+          $(System.DefaultWorkingDirectory)/sonic-gnmi.msft/test-results/junit-integration-env.xml
+          $(System.DefaultWorkingDirectory)/sonic-gnmi.msft/test-results/junit-integration-dialout.xml
         failTaskOnFailedTests: true
         publishRunAttachments: true
         testRunTitle: 'Integration Tests'
 
     - publish: $(Build.ArtifactStagingDirectory)/
-      artifact: sonic-gnmi
+      artifact: sonic-gnmi.msft
       displayName: "Archive artifacts"
 
     - task: PublishCodeCoverageResults@1
       inputs:
         codeCoverageTool: Cobertura
-        summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-gnmi/coverage.xml'
+        summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-gnmi.msft/coverage.xml'
       displayName: 'Publish coverage'
