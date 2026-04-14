@@ -23,10 +23,6 @@ on:
       - 'kubesonic'
   workflow_dispatch:
 
-env:
-  BUILD_BRANCH: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request') && github.event.pull_request.base.ref || github.ref_name }}
-
-
 jobs:
   analyze:
     name: Analyze
@@ -66,7 +62,7 @@ jobs:
         with:
           repository: sonic-net/sonic-mgmt-common
           path: sonic-mgmt-common
-          ref: refs/heads/${{ env.BUILD_BRANCH }}
+          ref: refs/heads/master
           fetch-depth: 2
           persist-credentials: false
 
