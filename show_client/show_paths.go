@@ -1185,6 +1185,18 @@ func init() {
 		nil,
 	)
 
+	// SHOW/platform/pcieinfo
+	sdc.RegisterCliPath(
+		[]string{"SHOW", "platform", "pcieinfo"},
+		getPlatformPcieinfo,
+		"SHOW/platform/pcieinfo[OPTIONS]: Show device PCIe information",
+		0,
+		0,
+		nil,
+		showCmdOptionCheck,
+		showCmdOptionVerbose,
+	)
+
 	// SHOW/platform/syseeprom
 	sdc.RegisterCliPath(
 		[]string{"SHOW", "platform", "syseeprom"},
