@@ -861,7 +861,7 @@ func init() {
 		getARP,
 		"SHOW/arp/{ipaddress}[OPTIONS]: Show IP ARP table",
 		0,
-		2,
+		1,
 		nil,
 		showCmdOptionSonicCliIfaceMode,
 		showCmdOptionIface,

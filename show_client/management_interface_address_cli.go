@@ -12,8 +12,8 @@ import (
 
 // ManagementInterfaceAddress represents a single management interface address entry
 type ManagementInterfaceAddress struct {
-	ManagementIPAddress             string `json:"Management IP address"`
-	ManagementNetworkDefaultGateway string `json:"Management Network Default Gateway"`
+	ManagementIPAddress             string `json:"management_ip_address"`
+	ManagementNetworkDefaultGateway string `json:"management_network_default_gateway"`
 }
 
 const (

@@ -34,7 +34,7 @@ func TestGetManagementInterfaceAddress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout*time.Second)
 	defer cancel()
 
-	expectedManagementInterface := `[{"Management IP address":"10.0.0.5/8","Management Network Default Gateway":"10.0.0.1"},{"Management IP address":"192.168.1.100/24","Management Network Default Gateway":"192.168.1.1"}]`
+	expectedManagementInterface := `[{"management_ip_address":"10.0.0.5/8","management_network_default_gateway":"10.0.0.1"},{"management_ip_address":"192.168.1.100/24","management_network_default_gateway":"192.168.1.1"}]`
 
 	tests := []struct {
 		desc        string
@@ -96,7 +96,7 @@ func TestGetManagementInterfaceAddress(t *testing.T) {
 				elem: <name: "address" >
 			`,
 			wantRetCode: codes.OK,
-			wantRespVal: []byte(`[{"Management IP address":"192.168.1.100/24","Management Network Default Gateway":""}]`),
+			wantRespVal: []byte(`[{"management_ip_address":"192.168.1.100/24","management_network_default_gateway":""}]`),
 			valTest:     true,
 			testInit: func() *gomonkey.Patches {
 				patches := gomonkey.NewPatches()
